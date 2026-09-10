@@ -1,0 +1,984 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LP = Players.LocalPlayer
+local PlayerGui = LP:WaitForChild("PlayerGui")
+
+local TheVeilPrediction = {}
+
+local STATE = {
+    enabled = false,
+    predictionRadius = 18,
+    crouchRadius = 10,
+    predictionTime = 0.18,
+    crouchDuration = 0.35,
+
+    whiteCircle = true,
+    redCircle = true,
+
+    crouching = false,
+    lastAttackTime = 0,
+    lastCrouchTime = 0,
+
+    veilPlayer = nil,
+    veilCharacter = nil,
+    veilRoot = nil,
+
+    heartbeat = nil,
+    characterConnection = nil,
+    playerConnections = {},
+    animationConnections = {},
+}
+
+local THE_VEIL_NAMES = {
+    ["the veil"] = true,
+}
+
+local THE_VEIL_ANIMATION_IDS = {
+    ["75258958842388"] = true,
+    ["92098503722633"] = true,
+    ["138045669415653"] = true,
+    ["93136435416899"] = true,
+    ["84093948968516"] = true,
+    ["86266790353635"] = true,
+}
+
+local WHITE_CIRCLE_NAME = "BOLONG_TheVeil_AimPrediction"
+local RED_CIRCLE_NAME = "BOLONG_TheVeil_CrouchWhen"
+
+local whiteCircle = nil
+local redCircle = nil
+
+local whiteSegments = {}
+local redSegments = {}
+
+local attackState = {
+    active = false,
+    animationId = nil,
+    startedAt = 0,
+    track = nil,
+}
+
+local function isTheVeil(player)
+    if not player then
+        return false
+    end
+
+    local name = string.lower(
+        tostring(player.Name or "")
+    )
+
+    local displayName = string.lower(
+        tostring(player.DisplayName or "")
+    )
+
+    return THE_VEIL_NAMES[name]
+        or THE_VEIL_NAMES[displayName]
+        or name == "the veil"
+        or displayName == "the veil"
+end
+
+local function getRoot(character)
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+end
+
+local function getLocalRoot()
+    local character = LP.Character
+
+    if not character then
+        return nil
+    end
+
+    return getRoot(character)
+end
+
+local function findTheVeil()
+    for _, player in ipairs(
+        Players:GetPlayers()
+    ) do
+        if player ~= LP and isTheVeil(player) then
+            local character = player.Character
+            local root = getRoot(character)
+
+            if character and root then
+                return player, character, root
+            end
+        end
+    end
+
+    return nil, nil, nil
+end
+
+local function updateTheVeil()
+    local player, character, root =
+        findTheVeil()
+
+    STATE.veilPlayer = player
+    STATE.veilCharacter = character
+    STATE.veilRoot = root
+end
+
+local function getHorizontalUnit(vector)
+    local flat = Vector3.new(
+        vector.X,
+        0,
+        vector.Z
+    )
+
+    if flat.Magnitude <= 0.001 then
+        return nil
+    end
+
+    return flat.Unit
+end
+
+local function getDistance()
+    local localRoot = getLocalRoot()
+
+    if not localRoot or not STATE.veilRoot then
+        return math.huge
+    end
+
+    return (
+        localRoot.Position -
+        STATE.veilRoot.Position
+    ).Magnitude
+end
+
+local function isInsideWhiteCircle()
+    return getDistance() <=
+        STATE.predictionRadius
+end
+
+local function isInsideRedCircle()
+    return getDistance() <=
+        STATE.crouchRadius
+end
+
+local function getPredictedPosition()
+    if not STATE.veilRoot then
+        return nil
+    end
+
+    local position =
+        STATE.veilRoot.Position
+
+    local velocity =
+        STATE.veilRoot.AssemblyLinearVelocity
+
+    local prediction =
+        math.clamp(
+            tonumber(STATE.predictionTime) or 0.18,
+            0,
+            1
+        )
+
+    return position +
+        (velocity * prediction)
+end
+
+local function getPredictedDistance()
+    local localRoot = getLocalRoot()
+
+    if not localRoot then
+        return math.huge
+    end
+
+    local predicted =
+        getPredictedPosition()
+
+    if not predicted then
+        return math.huge
+    end
+
+    return (
+        localRoot.Position -
+        predicted
+    ).Magnitude
+end
+
+local function getAttackAnimationId(track)
+    if not track then
+        return nil
+    end
+
+    local animation = track.Animation
+
+    if not animation then
+        return nil
+    end
+
+    local id = tostring(
+        animation.AnimationId or ""
+    )
+
+    id = id:gsub(
+        "rbxassetid://",
+        ""
+    )
+
+    return id
+end
+
+local function isVeilAttackAnimation(track)
+    local id =
+        getAttackAnimationId(track)
+
+    if not id then
+        return false
+    end
+
+    return THE_VEIL_ANIMATION_IDS[id] == true
+end
+
+local function setCrouch(state)
+    local character = LP.Character
+
+    if not character then
+        return false
+    end
+
+    state = state == true
+
+    pcall(function()
+        character:SetAttribute(
+            "Crouchingserver",
+            state
+        )
+    end)
+
+    pcall(function()
+        character:SetAttribute(
+            "Crouching",
+            state
+        )
+    end)
+
+    local mechanics =
+        ReplicatedStorage:FindFirstChild(
+            "Remotes"
+        )
+
+    mechanics = mechanics
+        and mechanics:FindFirstChild(
+            "Mechanics"
+        )
+
+    local changeAttribute =
+        mechanics
+        and mechanics:FindFirstChild(
+            "ChangeAttribute"
+        )
+
+    if changeAttribute
+        and changeAttribute:IsA(
+            "RemoteEvent"
+        )
+    then
+        pcall(function()
+            changeAttribute:FireServer(
+                "Crouching",
+                state
+            )
+        end)
+
+        pcall(function()
+            changeAttribute:FireServer(
+                "Crouchingserver",
+                state
+            )
+        end)
+    end
+
+    STATE.crouching = state
+
+    return true
+end
+
+local function stopCrouch()
+    if not STATE.crouching then
+        return
+    end
+
+    setCrouch(false)
+end
+
+local function shouldCrouch()
+    if not STATE.enabled then
+        return false
+    end
+
+    if not STATE.veilRoot then
+        return false
+    end
+
+    if not attackState.active then
+        return false
+    end
+
+    if not isInsideWhiteCircle() then
+        return false
+    end
+
+    local predictedDistance =
+        getPredictedDistance()
+
+    if predictedDistance <=
+        STATE.crouchRadius
+    then
+        return true
+    end
+
+    if isInsideRedCircle() then
+        return true
+    end
+
+    return false
+end
+
+local function triggerCrouch()
+    local now = os.clock()
+
+    if now - STATE.lastCrouchTime < 0.12 then
+        return
+    end
+
+    STATE.lastCrouchTime = now
+
+    if setCrouch(true) then
+        local duration =
+            math.clamp(
+                tonumber(STATE.crouchDuration) or 0.35,
+                0.05,
+                2
+            )
+
+        task.delay(
+            duration,
+            function()
+                if STATE.crouching then
+                    stopCrouch()
+                end
+            end
+        )
+    end
+end
+
+local function registerVeilAttack(track)
+    if not STATE.enabled then
+        return
+    end
+
+    if not STATE.veilPlayer then
+        return
+    end
+
+    if not isVeilAttackAnimation(track) then
+        return
+    end
+
+    if not isInsideWhiteCircle() then
+        return
+    end
+
+    local animationId =
+        getAttackAnimationId(track)
+
+    attackState.active = true
+    attackState.animationId = animationId
+    attackState.startedAt = os.clock()
+    attackState.track = track
+
+    STATE.lastAttackTime =
+        attackState.startedAt
+end
+
+local function watchVeilCharacter(
+    player,
+    character
+)
+    if not player or not character then
+        return
+    end
+
+    if not isTheVeil(player) then
+        return
+    end
+
+    local old =
+        STATE.animationConnections[player]
+
+    if old then
+        for _, connection in ipairs(old) do
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+    end
+
+    STATE.animationConnections[player] = {}
+
+    local humanoid =
+        character:FindFirstChildOfClass(
+            "Humanoid"
+        )
+
+    if not humanoid then
+        humanoid =
+            character:WaitForChild(
+                "Humanoid",
+                5
+            )
+    end
+
+    if not humanoid then
+        return
+    end
+
+    local connection =
+        humanoid.AnimationPlayed:Connect(
+            function(track)
+                registerVeilAttack(track)
+            end
+        )
+
+    table.insert(
+        STATE.animationConnections[player],
+        connection
+    )
+
+    task.spawn(function()
+        for _ = 1, 12 do
+            if not character.Parent then
+                break
+            end
+
+            local ok, tracks =
+                pcall(function()
+                    return humanoid:GetPlayingAnimationTracks()
+                end)
+
+            if ok and tracks then
+                for _, track in ipairs(tracks) do
+                    if isVeilAttackAnimation(track) then
+                        registerVeilAttack(track)
+                    end
+                end
+            end
+
+            task.wait(0.025)
+        end
+    end)
+end
+
+local function watchPlayer(player)
+    if not player
+        or player == LP
+        or not isTheVeil(player)
+    then
+        return
+    end
+
+    if STATE.playerConnections[player] then
+        return
+    end
+
+    local connections = {}
+
+    STATE.playerConnections[player] =
+        connections
+
+    table.insert(
+        connections,
+        player.CharacterAdded:Connect(
+            function(character)
+                task.wait()
+
+                watchVeilCharacter(
+                    player,
+                    character
+                )
+            end
+        )
+    )
+
+    if player.Character then
+        task.spawn(function()
+            watchVeilCharacter(
+                player,
+                player.Character
+            )
+        end)
+    end
+end
+
+local function unwatchPlayer(player)
+    local connections =
+        STATE.playerConnections[player]
+
+    if connections then
+        for _, connection in ipairs(
+            connections
+        ) do
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+    end
+
+    STATE.playerConnections[player] = nil
+
+    local animationConnections =
+        STATE.animationConnections[player]
+
+    if animationConnections then
+        for _, connection in ipairs(
+            animationConnections
+        ) do
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+    end
+
+    STATE.animationConnections[player] = nil
+
+    if STATE.veilPlayer == player then
+        STATE.veilPlayer = nil
+        STATE.veilCharacter = nil
+        STATE.veilRoot = nil
+    end
+end
+
+local function createCircle(
+    name,
+    radius,
+    segments
+)
+    local folder =
+        Instance.new("Folder")
+
+    folder.Name = name
+    folder.Parent = Workspace
+
+    local attachments = {}
+
+    for i = 1, segments do
+        local attachment =
+            Instance.new("Attachment")
+
+        attachment.Name =
+            "Point_" .. i
+
+        attachment.Parent = folder
+
+        table.insert(
+            attachments,
+            attachment
+        )
+    end
+
+    local beams = {}
+
+    for i = 1, segments do
+        local nextIndex = i + 1
+
+        if nextIndex > segments then
+            nextIndex = 1
+        end
+
+        local beam =
+            Instance.new("Beam")
+
+        beam.Attachment0 =
+            attachments[i]
+
+        beam.Attachment1 =
+            attachments[nextIndex]
+
+        beam.FaceCamera = true
+        beam.Segments = 1
+        beam.Width0 = 0.045
+        beam.Width1 = 0.045
+        beam.Transparency =
+            NumberSequence.new(0.30)
+
+        beam.Parent = folder
+
+        table.insert(
+            beams,
+            beam
+        )
+    end
+
+    return {
+        folder = folder,
+        attachments = attachments,
+        beams = beams,
+    }
+end
+
+local function destroyCircle(circle)
+    if not circle then
+        return
+    end
+
+    if circle.folder then
+        pcall(function()
+            circle.folder:Destroy()
+        end)
+    end
+end
+
+local function ensureCircles()
+    if STATE.whiteCircle
+        and not whiteCircle
+    then
+        whiteCircle = createCircle(
+            WHITE_CIRCLE_NAME,
+            STATE.predictionRadius,
+            96
+        )
+
+        whiteSegments =
+            whiteCircle.attachments
+    end
+
+    if STATE.redCircle
+        and not redCircle
+    then
+        redCircle = createCircle(
+            RED_CIRCLE_NAME,
+            STATE.crouchRadius,
+            96
+        )
+
+        redSegments =
+            redCircle.attachments
+    end
+end
+
+local function updateCircle(
+    circle,
+    radius
+)
+    if not circle then
+        return
+    end
+
+    local localRoot =
+        getLocalRoot()
+
+    if not localRoot then
+        return
+    end
+
+    local center =
+        localRoot.Position +
+        Vector3.new(
+            0,
+            0.20,
+            0
+        )
+
+    local attachments =
+        circle.attachments
+
+    local count =
+        #attachments
+
+    for i, attachment in ipairs(
+        attachments
+    ) do
+        local angle =
+            ((i - 1) / count) *
+            math.pi *
+            2
+
+        attachment.WorldPosition =
+            center +
+            Vector3.new(
+                math.cos(angle) * radius,
+                0,
+                math.sin(angle) * radius
+            )
+    end
+end
+
+local function updateCircles()
+    if not STATE.enabled then
+        return
+    end
+
+    ensureCircles()
+
+    if STATE.whiteCircle then
+        updateCircle(
+            whiteCircle,
+            STATE.predictionRadius
+        )
+    end
+
+    if STATE.redCircle then
+        updateCircle(
+            redCircle,
+            STATE.crouchRadius
+        )
+    end
+end
+
+local function updateAttackState()
+    if not attackState.active then
+        return
+    end
+
+    local now = os.clock()
+    local age =
+        now - attackState.startedAt
+
+    local track =
+        attackState.track
+
+    local playing = false
+
+    if track then
+        pcall(function()
+            playing = track.IsPlaying
+        end)
+    end
+
+    if age > 1.25
+        or not STATE.veilRoot
+        or not STATE.veilPlayer
+        or not playing
+    then
+        attackState.active = false
+        attackState.animationId = nil
+        attackState.track = nil
+
+        if STATE.crouching then
+            stopCrouch()
+        end
+    end
+end
+
+local function processPrediction()
+    if not STATE.enabled then
+        return
+    end
+
+    if not STATE.veilPlayer
+        or not STATE.veilCharacter
+        or not STATE.veilRoot
+    then
+        return
+    end
+
+    if not isInsideWhiteCircle() then
+        return
+    end
+
+    if not attackState.active then
+        return
+    end
+
+    if shouldCrouch() then
+        triggerCrouch()
+    end
+end
+
+function TheVeilPrediction:SetEnabled(value)
+    STATE.enabled = value == true
+
+    if not STATE.enabled then
+        attackState.active = false
+        attackState.animationId = nil
+        attackState.track = nil
+
+        stopCrouch()
+    end
+end
+
+function TheVeilPrediction:GetEnabled()
+    return STATE.enabled
+end
+
+function TheVeilPrediction:SetDetectionDistance(value)
+    local number = tonumber(value)
+
+    if number then
+        STATE.predictionRadius =
+            math.clamp(number, 1, 100)
+    end
+end
+
+function TheVeilPrediction:GetDetectionDistance()
+    return STATE.predictionRadius
+end
+
+function TheVeilPrediction:SetCrouchWhen(value)
+    local number = tonumber(value)
+
+    if number then
+        STATE.crouchRadius =
+            math.clamp(number, 1, 100)
+    elseif typeof(value) == "boolean" then
+        STATE.crouchRadius =
+            value and 10 or 0
+    end
+end
+
+function TheVeilPrediction:GetCrouchWhen()
+    return STATE.crouchRadius
+end
+
+function TheVeilPrediction:SetPredictionTime(value)
+    local number = tonumber(value)
+
+    if number then
+        STATE.predictionTime =
+            math.clamp(number, 0, 1)
+    end
+end
+
+function TheVeilPrediction:GetPredictionTime()
+    return STATE.predictionTime
+end
+
+function TheVeilPrediction:SetCrouchDuration(value)
+    local number = tonumber(value)
+
+    if number then
+        STATE.crouchDuration =
+            math.clamp(number, 0.05, 2)
+    end
+end
+
+function TheVeilPrediction:SetWhiteCircle(value)
+    STATE.whiteCircle = value == true
+
+    if not STATE.whiteCircle then
+        destroyCircle(whiteCircle)
+        whiteCircle = nil
+        whiteSegments = {}
+    end
+end
+
+function TheVeilPrediction:SetRedCircle(value)
+    STATE.redCircle = value == true
+
+    if not STATE.redCircle then
+        destroyCircle(redCircle)
+        redCircle = nil
+        redSegments = {}
+    end
+end
+
+function TheVeilPrediction:Destroy()
+    STATE.enabled = false
+
+    stopCrouch()
+
+    if STATE.heartbeat then
+        pcall(function()
+            STATE.heartbeat:Disconnect()
+        end)
+
+        STATE.heartbeat = nil
+    end
+
+    if STATE.characterConnection then
+        pcall(function()
+            STATE.characterConnection:Disconnect()
+        end)
+
+        STATE.characterConnection = nil
+    end
+
+    for player in pairs(
+        STATE.playerConnections
+    ) do
+        unwatchPlayer(player)
+    end
+
+    table.clear(
+        STATE.playerConnections
+    )
+
+    table.clear(
+        STATE.animationConnections
+    )
+
+    destroyCircle(whiteCircle)
+    destroyCircle(redCircle)
+
+    whiteCircle = nil
+    redCircle = nil
+
+    table.clear(whiteSegments)
+    table.clear(redSegments)
+
+    attackState.active = false
+    attackState.animationId = nil
+    attackState.track = nil
+
+    STATE.veilPlayer = nil
+    STATE.veilCharacter = nil
+    STATE.veilRoot = nil
+end
+
+updateTheVeil()
+
+for _, player in ipairs(
+    Players:GetPlayers()
+) do
+    watchPlayer(player)
+end
+
+local playerAddedConnection =
+    Players.PlayerAdded:Connect(
+        function(player)
+            watchPlayer(player)
+        end
+    )
+
+local playerRemovingConnection =
+    Players.PlayerRemoving:Connect(
+        function(player)
+            unwatchPlayer(player)
+        end
+    )
+
+STATE.characterConnection =
+    LP.CharacterAdded:Connect(
+        function()
+            task.wait()
+            updateTheVeil()
+        end
+    )
+
+STATE.heartbeat =
+    RunService.Heartbeat:Connect(
+        function()
+            updateTheVeil()
+            updateCircles()
+            updateAttackState()
+            processPrediction()
+        end
+    )
+
+TheVeilPrediction._playerAddedConnection =
+    playerAddedConnection
+
+TheVeilPrediction._playerRemovingConnection =
+    playerRemovingConnection
+
+return TheVeilPrediction
