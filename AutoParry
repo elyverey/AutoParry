@@ -1,0 +1,1130 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local LP = Players.LocalPlayer
+local PlayerGui = LP:WaitForChild("PlayerGui")
+
+local AutoParry = {}
+
+local STATE = {
+    enabled = false,
+    radiusEsp = false,
+    radius = 8,
+    aimStrictness = 0.10,
+    lastParryTime = 0,
+    activeAttackers = {},
+    localCharacter = nil,
+    localRoot = nil,
+    cachedPing = 0,
+    lastPingUpdate = 0,
+    heartbeat = nil,
+    characterConnection = nil,
+    playerConnections = {},
+}
+
+local INVISIBLE_AIM_RADIUS = 12
+
+local ATTACK_REACH_ALLOWANCE = 3.0
+
+local NORMAL_ATTACK_IDS = {
+    ["78432063483146"] = true,
+    ["121216847022485"] = true,
+    ["74968262036854"] = true,
+    ["132817836308238"] = true,
+    ["82666958311998"] = true,
+    ["111920872708571"] = true,
+    ["106871536134254"] = true,
+    ["109402730355822"] = true,
+    ["130593238885843"] = true,
+    ["138720291317243"] = true,
+    ["139369275981139"] = true,
+    ["133963973694098"] = true,
+    ["78935059863801"] = true,
+}
+
+local LUNGE_ATTACK_IDS = {
+    ["118907603246885"] = true,
+    ["135002183282873"] = true,
+    ["113255068724446"] = true,
+    ["129784271201071"] = true,
+    ["105374834496520"] = true,
+    ["117070354890871"] = true,
+    ["115244153053858"] = true,
+    ["110355011987939"] = true,
+    ["117042998468241"] = true,
+    ["122812055447896"] = true,
+}
+
+local VALID = {}
+
+for id in pairs(NORMAL_ATTACK_IDS) do
+    VALID[id] = "attack"
+end
+
+for id in pairs(LUNGE_ATTACK_IDS) do
+    VALID[id] = "lungehold"
+end
+
+local previousLook = {}
+local radiusParts = {}
+local radiusAttachments = {}
+local radiusBeams = {}
+local animationConnections = {}
+local playerConnections = {}
+
+local function getRoot(character)
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+end
+
+local function updateLocalCharacter()
+    local character = LP.Character
+
+    if character ~= STATE.localCharacter then
+        STATE.localCharacter = character
+        STATE.localRoot = getRoot(character)
+    elseif character and not STATE.localRoot then
+        STATE.localRoot = getRoot(character)
+    elseif STATE.localRoot and not STATE.localRoot.Parent then
+        STATE.localRoot = getRoot(character)
+    end
+end
+
+local function getFlatUnit(vector)
+    local flat = Vector3.new(vector.X, 0, vector.Z)
+
+    if flat.Magnitude <= 0.001 then
+        return nil
+    end
+
+    return flat.Unit
+end
+
+local function getAimThreshold()
+    local strictness = tonumber(STATE.aimStrictness) or 0.10
+
+    if strictness <= 0.10 then
+        return 0.02
+    end
+
+    if strictness <= 0.90 then
+        return strictness - 0.08
+    end
+
+    if strictness >= 1 then
+        return 0.86
+    end
+
+    local alpha = (strictness - 0.90) / 0.10
+
+    return 0.82 + ((0.86 - 0.82) * alpha)
+end
+
+local function getAimRadius()
+    local radius = tonumber(STATE.radius) or 8
+
+    if radius <= 8 then
+        return INVISIBLE_AIM_RADIUS + ATTACK_REACH_ALLOWANCE
+    end
+
+    return radius + ATTACK_REACH_ALLOWANCE
+end
+
+local function getAttackReach(attackType)
+    if attackType == "lungehold" then
+        return ATTACK_REACH_ALLOWANCE + 1.25
+    end
+
+    return ATTACK_REACH_ALLOWANCE
+end
+
+local function checkAim(killerRoot, attackType)
+    if not STATE.localRoot or not killerRoot then
+        return false
+    end
+
+    local offset = STATE.localRoot.Position - killerRoot.Position
+    local distance = offset.Magnitude
+
+    if distance <= 0.001 then
+        return true
+    end
+
+    local aimRadius = getAimRadius()
+
+    if distance > aimRadius then
+        return false
+    end
+
+    local killerLook = getFlatUnit(killerRoot.CFrame.LookVector)
+    local directionToTarget = getFlatUnit(offset)
+
+    if not killerLook or not directionToTarget then
+        return false
+    end
+
+    local dot = killerLook:Dot(directionToTarget)
+
+    previousLook[killerRoot] = dot
+
+    local baseThreshold = getAimThreshold()
+
+    local reach = getAttackReach(attackType)
+
+    local effectiveDistance = math.max(
+        0,
+        distance - reach
+    )
+
+    local normalizedDistance = math.clamp(
+        effectiveDistance / math.max(STATE.radius, 0.001),
+        0,
+        1
+    )
+
+    local distanceAssist = (1 - normalizedDistance) * 0.08
+
+    local effectiveThreshold =
+        math.clamp(
+            baseThreshold - distanceAssist,
+            -0.15,
+            0.86
+        )
+
+    return dot >= effectiveThreshold
+end
+
+local function updatePing()
+    local now = os.clock()
+
+    if now - STATE.lastPingUpdate < 0.25 then
+        return
+    end
+
+    STATE.lastPingUpdate = now
+
+    local ok, ping = pcall(function()
+        return LP:GetNetworkPing()
+    end)
+
+    if ok and typeof(ping) == "number" then
+        STATE.cachedPing = math.clamp(ping, 0, 1)
+    end
+end
+
+local function getTargetPoints(character)
+    local points = {}
+
+    if not character then
+        return points
+    end
+
+    local root = getRoot(character)
+
+    if root then
+        table.insert(points, root.Position)
+        table.insert(points, root.Position + Vector3.new(0, 0.65, 0))
+        table.insert(points, root.Position + Vector3.new(0, 1.25, 0))
+        table.insert(points, root.Position + Vector3.new(0.65, 0, 0))
+        table.insert(points, root.Position + Vector3.new(-0.65, 0, 0))
+    end
+
+    local head = character:FindFirstChild("Head")
+    local upperTorso = character:FindFirstChild("UpperTorso")
+    local lowerTorso = character:FindFirstChild("LowerTorso")
+
+    if head then
+        table.insert(points, head.Position)
+    end
+
+    if upperTorso then
+        table.insert(points, upperTorso.Position)
+    end
+
+    if lowerTorso then
+        table.insert(points, lowerTorso.Position)
+    end
+
+    return points
+end
+
+local function rayClear(origin, target, killerCharacter, targetCharacter)
+    local direction = target - origin
+
+    if direction.Magnitude <= 0.001 then
+        return true
+    end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {
+        killerCharacter,
+        targetCharacter,
+    }
+    params.IgnoreWater = true
+
+    local result = Workspace:Raycast(
+        origin,
+        direction,
+        params
+    )
+
+    return result == nil
+end
+
+local function checkLOS(killerCharacter, targetCharacter)
+    if not STATE.localRoot then
+        return false
+    end
+
+    local points = getTargetPoints(targetCharacter)
+
+    if #points == 0 then
+        return false
+    end
+
+    local clearCount = 0
+
+    for _, point in ipairs(points) do
+        if rayClear(
+            STATE.localRoot.Position,
+            point,
+            killerCharacter,
+            targetCharacter
+        ) then
+            clearCount += 1
+        end
+
+        if clearCount >= 2 then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function getParryCooldown(distance)
+    if distance <= 2.5 then
+        return 0.025
+    elseif distance <= 3.5 then
+        return 0.030
+    elseif distance <= 4.5 then
+        return 0.035
+    elseif distance <= 5.5 then
+        return 0.045
+    elseif distance <= 7 then
+        return 0.055
+    end
+
+    return 0.075
+end
+
+local function findParryButton()
+    local survivorMob = PlayerGui:FindFirstChild("Survivor-mob")
+
+    if not survivorMob then
+        return nil
+    end
+
+    local controls = survivorMob:FindFirstChild("Controls")
+
+    if not controls then
+        return nil
+    end
+
+    local guiMob = controls:FindFirstChild("Gui-mob")
+
+    if not guiMob then
+        return nil
+    end
+
+    if guiMob:IsA("GuiButton") then
+        return guiMob
+    end
+
+    return guiMob:FindFirstChildWhichIsA(
+        "GuiButton",
+        true
+    )
+end
+
+local function doParry()
+    local button = findParryButton()
+
+    if not button then
+        return false
+    end
+
+    if firesignal then
+        local downOK = pcall(function()
+            firesignal(button.MouseButton1Down)
+        end)
+
+        local upOK = pcall(function()
+            firesignal(button.MouseButton1Up)
+        end)
+
+        if downOK and upOK then
+            return true
+        end
+    end
+
+    local connections = {}
+
+    pcall(function()
+        connections = getconnections(
+            button.MouseButton1Click
+        )
+    end)
+
+    if #connections > 0 then
+        for _, connection in ipairs(connections) do
+            if connection.Function then
+                pcall(connection.Function)
+            end
+        end
+
+        return true
+    end
+
+    return false
+end
+
+local function getAttackGrace(attackType)
+    if attackType == "lungehold" then
+        return 1.05
+    end
+
+    return 0.80
+end
+
+local function getParryWindow(attackType)
+    if attackType == "lungehold" then
+        return 7.0
+    end
+
+    return 6.25
+end
+
+local function validateAndParry(player, attackType, track)
+    if not STATE.enabled then
+        return false
+    end
+
+    if not player or player == LP then
+        return false
+    end
+
+    if not STATE.localCharacter or not STATE.localRoot then
+        return false
+    end
+
+    local killerCharacter = player.Character
+
+    if not killerCharacter then
+        return false
+    end
+
+    local killerRoot = getRoot(killerCharacter)
+
+    if not killerRoot then
+        return false
+    end
+
+    local attackerData = STATE.activeAttackers[player]
+
+    if not attackerData then
+        return false
+    end
+
+    if attackerData.attackType ~= attackType then
+        return false
+    end
+
+    local now = os.clock()
+    local age = now - attackerData.time
+
+    if age < 0 or age > getAttackGrace(attackType) then
+        return false
+    end
+
+    if track then
+        local playing = false
+
+        pcall(function()
+            playing = track.IsPlaying
+        end)
+
+        if not playing and age > 0.12 then
+            return false
+        end
+    end
+
+    local offset =
+        STATE.localRoot.Position -
+        killerRoot.Position
+
+    local distance = offset.Magnitude
+
+    local attackReach = getAttackReach(
+        attackType
+    )
+
+    local effectiveRadius =
+        STATE.radius +
+        attackReach
+
+    if distance > effectiveRadius then
+        return false
+    end
+
+    local cooldown = getParryCooldown(
+        math.max(
+            0,
+            distance - attackReach
+        )
+    )
+
+    if now - STATE.lastParryTime < cooldown then
+        return false
+    end
+
+    if not checkLOS(
+        killerCharacter,
+        STATE.localCharacter
+    ) then
+        return false
+    end
+
+    if not checkAim(
+        killerRoot,
+        attackType
+    ) then
+        return false
+    end
+
+    local killerVelocity =
+        killerRoot.AssemblyLinearVelocity
+
+    local horizontalVelocity = Vector3.new(
+        killerVelocity.X,
+        0,
+        killerVelocity.Z
+    )
+
+    local directionToTarget =
+        getFlatUnit(offset)
+
+    local closingSpeed = 0
+
+    if directionToTarget then
+        closingSpeed =
+            horizontalVelocity:Dot(
+                directionToTarget
+            )
+    end
+
+    local pingPrediction =
+        math.clamp(
+            STATE.cachedPing * 0.65,
+            0,
+            0.22
+        )
+
+    local speedPrediction = 0.035
+
+    if closingSpeed >= 16 then
+        speedPrediction = 0.075
+    elseif closingSpeed >= 10 then
+        speedPrediction = 0.060
+    elseif closingSpeed >= 6 then
+        speedPrediction = 0.050
+    end
+
+    local predictionTime =
+        speedPrediction +
+        pingPrediction
+
+    local predictedDistance = distance
+
+    if closingSpeed > 0 then
+        predictedDistance -=
+            closingSpeed * predictionTime
+    end
+
+    predictedDistance =
+        math.max(
+            0,
+            predictedDistance - attackReach
+        )
+
+    if predictedDistance >
+        getParryWindow(attackType)
+    then
+        return false
+    end
+
+    if predictedDistance >
+        STATE.radius
+    then
+        return false
+    end
+
+    if doParry() then
+        STATE.lastParryTime = now
+        STATE.activeAttackers[player] = nil
+        return true
+    end
+
+    return false
+end
+
+local function registerAnimation(player, track)
+    if not player or player == LP or not track then
+        return
+    end
+
+    local animation = track.Animation
+
+    if not animation then
+        return
+    end
+
+    local animationId =
+        tostring(
+            animation.AnimationId or ""
+        )
+
+    animationId =
+        animationId:gsub(
+            "rbxassetid://",
+            ""
+        )
+
+    local attackType =
+        VALID[animationId]
+
+    if not attackType then
+        return
+    end
+
+    STATE.activeAttackers[player] = {
+        attackType = attackType,
+        time = os.clock(),
+        track = track,
+        animationId = animationId,
+    }
+end
+
+local function scanPlayingAnimations(
+    player,
+    humanoid
+)
+    if not humanoid then
+        return
+    end
+
+    local ok, tracks =
+        pcall(function()
+            return humanoid:GetPlayingAnimationTracks()
+        end)
+
+    if not ok or not tracks then
+        return
+    end
+
+    for _, track in ipairs(tracks) do
+        registerAnimation(
+            player,
+            track
+        )
+    end
+end
+
+local function unwatchCharacter(player)
+    local connections =
+        animationConnections[player]
+
+    if connections then
+        for _, connection in ipairs(connections) do
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+    end
+
+    animationConnections[player] = nil
+    STATE.activeAttackers[player] = nil
+end
+
+local function watchCharacter(
+    player,
+    character
+)
+    unwatchCharacter(player)
+
+    if not character then
+        return
+    end
+
+    local humanoid =
+        character:FindFirstChildOfClass(
+            "Humanoid"
+        )
+
+    if not humanoid then
+        humanoid =
+            character:WaitForChild(
+                "Humanoid",
+                5
+            )
+    end
+
+    if not humanoid then
+        return
+    end
+
+    animationConnections[player] = {}
+
+    local connection =
+        humanoid.AnimationPlayed:Connect(
+            function(track)
+                registerAnimation(
+                    player,
+                    track
+                )
+            end
+        )
+
+    table.insert(
+        animationConnections[player],
+        connection
+    )
+
+    task.spawn(function()
+        for _ = 1, 8 do
+            if not character.Parent then
+                break
+            end
+
+            scanPlayingAnimations(
+                player,
+                humanoid
+            )
+
+            task.wait(0.025)
+        end
+    end)
+end
+
+local function watchPlayer(player)
+    if not player or player == LP then
+        return
+    end
+
+    if playerConnections[player] then
+        return
+    end
+
+    local connections = {}
+    playerConnections[player] = connections
+
+    table.insert(
+        connections,
+        player.CharacterAdded:Connect(
+            function(character)
+                watchCharacter(
+                    player,
+                    character
+                )
+            end
+        )
+    )
+
+    if player.Character then
+        task.spawn(function()
+            watchCharacter(
+                player,
+                player.Character
+            )
+        end)
+    end
+end
+
+local function unwatchPlayer(player)
+    if playerConnections[player] then
+        for _, connection in ipairs(
+            playerConnections[player]
+        ) do
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+    end
+
+    playerConnections[player] = nil
+
+    unwatchCharacter(player)
+    previousLook[player] = nil
+end
+
+local function createRadiusESP()
+    if #radiusAttachments > 0 then
+        return
+    end
+
+    local holder = Instance.new("Part")
+
+    holder.Name =
+        "BOLONG_AutoParryRadius"
+
+    holder.Anchored = true
+    holder.CanCollide = false
+    holder.CanTouch = false
+    holder.CanQuery = false
+    holder.Transparency = 1
+    holder.Size =
+        Vector3.new(
+            0.1,
+            0.1,
+            0.1
+        )
+
+    holder.Parent = Workspace
+
+    table.insert(
+        radiusParts,
+        holder
+    )
+
+    local segments = 96
+
+    for i = 1, segments do
+        local attachment =
+            Instance.new("Attachment")
+
+        attachment.Name =
+            "RadiusPoint_" .. i
+
+        attachment.Parent = holder
+
+        table.insert(
+            radiusAttachments,
+            attachment
+        )
+    end
+
+    for i = 1, segments do
+        local nextIndex = i + 1
+
+        if nextIndex > segments then
+            nextIndex = 1
+        end
+
+        local beam =
+            Instance.new("Beam")
+
+        beam.Name =
+            "RadiusLine_" .. i
+
+        beam.Attachment0 =
+            radiusAttachments[i]
+
+        beam.Attachment1 =
+            radiusAttachments[nextIndex]
+
+        beam.FaceCamera = true
+        beam.Segments = 1
+        beam.Width0 = 0.045
+        beam.Width1 = 0.045
+        beam.Transparency =
+            NumberSequence.new(0.35)
+
+        beam.Parent = holder
+
+        table.insert(
+            radiusBeams,
+            beam
+        )
+    end
+end
+
+local function updateRadiusESP()
+    if not STATE.radiusEsp
+        or not STATE.localRoot
+    then
+        for _, beam in ipairs(
+            radiusBeams
+        ) do
+            beam.Enabled = false
+        end
+
+        return
+    end
+
+    createRadiusESP()
+
+    local center =
+        STATE.localRoot.Position
+
+    local radius =
+        STATE.radius
+
+    local segments =
+        #radiusAttachments
+
+    local holder =
+        radiusParts[1]
+
+    if holder then
+        holder.CFrame =
+            CFrame.new(center)
+    end
+
+    for i, attachment in ipairs(
+        radiusAttachments
+    ) do
+        local angle =
+            ((i - 1) / segments) *
+            math.pi *
+            2
+
+        attachment.Position =
+            Vector3.new(
+                math.cos(angle) * radius,
+                0,
+                math.sin(angle) * radius
+            )
+    end
+
+    for _, beam in ipairs(
+        radiusBeams
+    ) do
+        beam.Enabled = true
+    end
+end
+
+local function cleanupRadiusESP()
+    for _, beam in ipairs(
+        radiusBeams
+    ) do
+        pcall(function()
+            beam:Destroy()
+        end)
+    end
+
+    for _, attachment in ipairs(
+        radiusAttachments
+    ) do
+        pcall(function()
+            attachment:Destroy()
+        end)
+    end
+
+    for _, part in ipairs(
+        radiusParts
+    ) do
+        pcall(function()
+            part:Destroy()
+        end)
+    end
+
+    table.clear(radiusBeams)
+    table.clear(radiusAttachments)
+    table.clear(radiusParts)
+end
+
+local function cleanupExpiredAttackers()
+    local now = os.clock()
+
+    for player, data in pairs(
+        STATE.activeAttackers
+    ) do
+        if not player
+            or not player.Parent
+            or not player.Character
+            or now - data.time >
+                getAttackGrace(
+                    data.attackType
+                )
+        then
+            STATE.activeAttackers[player] = nil
+        end
+    end
+end
+
+local function processAttackers()
+    if not STATE.enabled then
+        return
+    end
+
+    for player, data in pairs(
+        STATE.activeAttackers
+    ) do
+        if data
+            and player
+            and player.Parent
+        then
+            validateAndParry(
+                player,
+                data.attackType,
+                data.track
+            )
+        end
+    end
+end
+
+function AutoParry:SetEnabled(value)
+    STATE.enabled = value == true
+end
+
+function AutoParry:SetRadius(value)
+    local number = tonumber(value)
+
+    if number then
+        STATE.radius = number
+    end
+end
+
+function AutoParry:SetAimStrictness(value)
+    local number = tonumber(value)
+
+    if number then
+        STATE.aimStrictness = number
+    end
+end
+
+function AutoParry:SetRadiusESP(value)
+    STATE.radiusEsp = value ==
+       STATE.radiusEsp = value == true
+
+    if STATE.radiusEsp then
+        createRadiusESP()
+    else
+        for _, beam in ipairs(
+            radiusBeams
+        ) do
+            beam.Enabled = false
+        end
+    end
+end
+
+function AutoParry:GetEnabled()
+    return STATE.enabled
+end
+
+function AutoParry:GetRadius()
+    return STATE.radius
+end
+
+function AutoParry:GetAimStrictness()
+    return STATE.aimStrictness
+end
+
+function AutoParry:GetRadiusESP()
+    return STATE.radiusEsp
+end
+
+function AutoParry:Destroy()
+    STATE.enabled = false
+
+    if STATE.heartbeat then
+        pcall(function()
+            STATE.heartbeat:Disconnect()
+        end)
+
+        STATE.heartbeat = nil
+    end
+
+    if STATE.characterConnection then
+        pcall(function()
+            STATE.characterConnection:Disconnect()
+        end)
+
+        STATE.characterConnection = nil
+    end
+
+    for player in pairs(
+        playerConnections
+    ) do
+        unwatchPlayer(player)
+    end
+
+    table.clear(playerConnections)
+    table.clear(animationConnections)
+    table.clear(STATE.activeAttackers)
+    table.clear(previousLook)
+
+    cleanupRadiusESP()
+end
+
+updateLocalCharacter()
+
+for _, player in ipairs(
+    Players:GetPlayers()
+) do
+    watchPlayer(player)
+end
+
+local playerAddedConnection =
+    Players.PlayerAdded:Connect(
+        function(player)
+            watchPlayer(player)
+        end
+    )
+
+local playerRemovingConnection =
+    Players.PlayerRemoving:Connect(
+        function(player)
+            unwatchPlayer(player)
+        end
+    )
+
+local localCharacterConnection =
+    LP.CharacterAdded:Connect(
+        function(character)
+            STATE.localCharacter =
+                character
+
+            STATE.localRoot =
+                getRoot(character)
+
+            task.spawn(function()
+                if not STATE.localRoot then
+                    STATE.localRoot =
+                        character:WaitForChild(
+                            "HumanoidRootPart",
+                            5
+                        )
+                end
+            end)
+        end
+    )
+
+STATE.characterConnection =
+    localCharacterConnection
+
+STATE.heartbeat =
+    RunService.Heartbeat:Connect(
+        function()
+            updateLocalCharacter()
+            updatePing()
+            updateRadiusESP()
+            cleanupExpiredAttackers()
+            processAttackers()
+        end
+    )
+
+AutoParry._playerAddedConnection =
+    playerAddedConnection
+
+AutoParry._playerRemovingConnection =
+    playerRemovingConnection
+
+return AutoParry
