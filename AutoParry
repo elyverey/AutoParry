@@ -1001,7 +1001,7 @@ function AutoParry:SetAimStrictness(value)
 end
 
 function AutoParry:SetRadiusESP(value)
-    STATE.radiusEsp = value == STATE.radiusEsp = value == true
+        STATE.radiusEsp = value == true
 
     if STATE.radiusEsp then
         createRadiusESP()
