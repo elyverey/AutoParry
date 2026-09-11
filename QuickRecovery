@@ -1,6 +1,7 @@
 local Players=game:GetService("Players")
+
 local LP=Players.LocalPlayer
-local MasterLoop=(...)
+local MasterLoop=nil
 
 local QuickRecovery={
 	Enabled=false,
@@ -22,33 +23,47 @@ local VAULT_IDS={
 local Character=nil
 local Humanoid=nil
 local Check=nil
+
 local BoostToken=0
 local CooldownToken=0
+
 local VaultDetected=false
 local WasVaulting=false
 local Initialized=false
+
 local LastBoost=0
 local OldSpeed=17
 local Registered=false
 
 local function GetHumanoid()
-	if not Character or not Character.Parent then return nil end
+	if not Character or not Character.Parent then
+		return nil
+	end
+
 	return Character:FindFirstChildOfClass("Humanoid")
 end
 
 local function GetCheck()
-	if not Character or not Character.Parent then return nil end
+	if not Character or not Character.Parent then
+		return nil
+	end
+
 	return Character:FindFirstChild("CheckInterractable")
 end
 
 local function IsVaultAnimationPlaying()
 	local Hum=GetHumanoid()
-	if not Hum then return false end
+
+	if not Hum then
+		return false
+	end
 
 	for _,Track in ipairs(Hum:GetPlayingAnimationTracks()) do
 		local Animation=Track.Animation
+
 		if Animation then
 			local ID=string.match(Animation.AnimationId,"%d+")
+
 			if ID and VAULT_IDS[ID] then
 				return true
 			end
@@ -62,6 +77,7 @@ local function IsVaulting()
 	Check=Check and Check.Parent and Check or GetCheck()
 
 	local AttributeVaulting=false
+
 	if Check then
 		AttributeVaulting=Check:GetAttribute("isVaulting")==true
 	end
@@ -73,7 +89,7 @@ local function StartCooldown()
 	local Time=math.clamp(tonumber(QuickRecovery.Cooldown) or 0,0,70)
 
 	CooldownToken+=1
-	local Token=CooldownToken
+
 	local Now=os.clock()
 
 	QuickRecovery.CooldownStartedAt=Now
@@ -89,7 +105,9 @@ local function StartCooldown()
 end
 
 local function UpdateCooldown()
-	if not QuickRecovery.OnCooldown then return end
+	if not QuickRecovery.OnCooldown then
+		return
+	end
 
 	if os.clock()>=QuickRecovery.CooldownEndsAt then
 		QuickRecovery.OnCooldown=false
@@ -98,29 +116,47 @@ local function UpdateCooldown()
 end
 
 local function StopBoost(Token)
-	if Token and Token~=BoostToken then return end
+	if Token and Token~=BoostToken then
+		return
+	end
 
 	QuickRecovery.BoostActive=false
 	BoostToken+=1
 
 	local Hum=GetHumanoid()
+
 	if Hum and Hum.Health>0 then
 		Hum.WalkSpeed=OldSpeed
 	end
 end
 
 local function ActivateBoost()
-	if not QuickRecovery.Enabled then return end
-	if QuickRecovery.OnCooldown then return end
-	if QuickRecovery.BoostActive then return end
+	if not QuickRecovery.Enabled then
+		return
+	end
+
+	if QuickRecovery.OnCooldown then
+		return
+	end
+
+	if QuickRecovery.BoostActive then
+		return
+	end
 
 	local Now=os.clock()
-	if Now-LastBoost<0.2 then return end
+
+	if Now-LastBoost<0.2 then
+		return
+	end
 
 	local Hum=GetHumanoid()
-	if not Hum or Hum.Health<=0 then return end
+
+	if not Hum or Hum.Health<=0 then
+		return
+	end
 
 	LastBoost=Now
+
 	OldSpeed=Hum.WalkSpeed
 
 	if OldSpeed<=0 or OldSpeed>30 then
@@ -128,16 +164,21 @@ local function ActivateBoost()
 	end
 
 	QuickRecovery.BoostActive=true
+
 	BoostToken+=1
 
 	Hum.WalkSpeed=QuickRecovery.BoostSpeed
+
 	StartCooldown()
 end
 
 local function UpdateBoost()
-	if not QuickRecovery.BoostActive then return end
+	if not QuickRecovery.BoostActive then
+		return
+	end
 
 	local Hum=GetHumanoid()
+
 	if not Hum or Hum.Health<=0 then
 		StopBoost()
 		return
@@ -152,8 +193,13 @@ local function UpdateBoost()
 end
 
 local function UpdateVault()
-	if not QuickRecovery.Enabled then return end
-	if not Character or not Character.Parent then return end
+	if not QuickRecovery.Enabled then
+		return
+	end
+
+	if not Character or not Character.Parent then
+		return
+	end
 
 	Check=Check and Check.Parent and Check or GetCheck()
 
@@ -182,7 +228,9 @@ local function UpdateVault()
 end
 
 local function MasterUpdate()
-	if not QuickRecovery.Enabled then return end
+	if not QuickRecovery.Enabled then
+		return
+	end
 
 	UpdateCooldown()
 	UpdateBoost()
@@ -190,22 +238,35 @@ local function MasterUpdate()
 end
 
 local function RegisterMasterLoop()
-	if Registered then return end
+	if Registered then
+		return
+	end
 
 	if not MasterLoop or type(MasterLoop.Add)~="function" then
 		warn("[BOLONG-HUB] Quick Recovery: MasterLoop not found")
 		return
 	end
 
-	MasterLoop:Add("QuickRecovery",MasterUpdate)
-	Registered=true
+	local Success,Error=pcall(function()
+		MasterLoop:Add("QuickRecovery",MasterUpdate)
+	end)
+
+	if Success then
+		Registered=true
+	else
+		warn("[BOLONG-HUB] Quick Recovery MasterLoop Add failed:",Error)
+	end
 end
 
 local function UnregisterMasterLoop()
-	if not Registered then return end
+	if not Registered then
+		return
+	end
 
 	if MasterLoop and type(MasterLoop.Remove)=="function" then
-		MasterLoop:Remove("QuickRecovery")
+		pcall(function()
+			MasterLoop:Remove("QuickRecovery")
+		end)
 	end
 
 	Registered=false
@@ -218,6 +279,7 @@ local function SetupCharacter(Char)
 	Character=Char
 	Humanoid=Char:WaitForChild("Humanoid",10)
 	Check=nil
+
 	VaultDetected=false
 	WasVaulting=false
 	Initialized=false
@@ -227,7 +289,9 @@ local function SetupCharacter(Char)
 	QuickRecovery.CooldownStartedAt=0
 	QuickRecovery.CooldownEndsAt=0
 
-	if not Humanoid then return end
+	if not Humanoid then
+		return
+	end
 
 	if QuickRecovery.Enabled then
 		RegisterMasterLoop()
@@ -243,8 +307,10 @@ function QuickRecovery:SetEnabled(Value)
 
 		self.BoostActive=false
 		self.OnCooldown=false
+
 		self.CooldownStartedAt=0
 		self.CooldownEndsAt=0
+
 		self.VaultDetected=false
 		self.WasVaulting=false
 		self.Initialized=false
@@ -252,6 +318,7 @@ function QuickRecovery:SetEnabled(Value)
 		UnregisterMasterLoop()
 
 		local Hum=GetHumanoid()
+
 		if Hum and Hum.Health>0 then
 			Hum.WalkSpeed=17
 		end
@@ -268,17 +335,22 @@ end
 
 function QuickRecovery:SetCooldown(Value)
 	local Number=tonumber(Value)
-	if not Number then return end
+
+	if not Number then
+		return
+	end
 
 	Number=math.clamp(Number,0,70)
+
 	self.Cooldown=Number
 
 	if self.OnCooldown then
-		local Remaining=math.max(0,self.CooldownEndsAt-os.clock())
+		local Now=os.clock()
+		local Remaining=math.max(0,self.CooldownEndsAt-Now)
 		local NewRemaining=math.min(Remaining,Number)
 
-		self.CooldownStartedAt=os.clock()
-		self.CooldownEndsAt=os.clock()+NewRemaining
+		self.CooldownStartedAt=Now
+		self.CooldownEndsAt=Now+NewRemaining
 
 		if NewRemaining<=0 then
 			self.OnCooldown=false
@@ -336,10 +408,6 @@ if LP.Character then
 	task.spawn(function()
 		SetupCharacter(LP.Character)
 	end)
-end
-
-if MasterLoop then
-	RegisterMasterLoop()
 end
 
 return QuickRecovery
