@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LP = Players.LocalPlayer
 local PlayerGui = LP:WaitForChild("PlayerGui")
@@ -41,6 +42,7 @@ local NORMAL_ATTACK_IDS = {
     ["139369275981139"] = true,
     ["133963973694098"] = true,
     ["78935059863801"] = true,
+    ["88848807662765"] = true,
 }
 
 local LUNGE_ATTACK_IDS = {
@@ -354,11 +356,68 @@ local function findParryButton()
     )
 end
 
+local function getButtonCenter(button)
+    if not button then
+        return nil, nil
+    end
+
+    local ok, position, size = pcall(function()
+        return button.AbsolutePosition, button.AbsoluteSize
+    end)
+
+    if not ok or not position or not size then
+        return nil, nil
+    end
+
+    local x = position.X + (size.X / 2)
+    local y = position.Y + (size.Y / 2)
+
+    return x, y
+end
+
+local function parryWithVirtualInput(button)
+    if not VirtualInputManager then
+        return false
+    end
+
+    local x, y = getButtonCenter(button)
+
+    if not x or not y then
+        return false
+    end
+
+    local ok = pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(
+            x,
+            y,
+            0,
+            true,
+            game,
+            0
+        )
+
+        VirtualInputManager:SendMouseButtonEvent(
+            x,
+            y,
+            0,
+            false,
+            game,
+            0
+        )
+    end)
+
+    return ok
+end
+
 local function doParry()
     local button = findParryButton()
 
     if not button then
         return false
+    end
+
+    if parryWithVirtualInput(button) then
+        return true
     end
 
     if firesignal then
@@ -944,6 +1003,12 @@ local function cleanupExpiredAttackers()
     local now = os.clock()
 
     for player, data in pairs(
+                STATE.activeAttackers
+    ) do
+    local function cleanupExpiredAttackers()
+    local now = os.clock()
+
+    for player, data in pairs(
         STATE.activeAttackers
     ) do
         if not player
@@ -1001,7 +1066,7 @@ function AutoParry:SetAimStrictness(value)
 end
 
 function AutoParry:SetRadiusESP(value)
-        STATE.radiusEsp = value == true
+    STATE.radiusEsp = value == true
 
     if STATE.radiusEsp then
         createRadiusESP()
