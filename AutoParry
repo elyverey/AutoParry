@@ -12,7 +12,7 @@ local ACCENT_COLOR=Color3.fromRGB(255,255,255)
 local function Notify(title,content,delay)
     Chloex:MakeNotify({Title=title or "BOLONG-HUB",Description="Info",Content=content or "",Color=ACCENT_COLOR,Time=0.4,Delay=delay or 2})
 end
-local STATE={autoParryEnabled=false,autoParryRadiusEsp=false,autoParryRadius=10,aimStrictness=0.1,ignoredSkillsKiller=false,lastParryTime=0,activeAttackers={}}
+local STATE={autoParryEnabled=false,autoParryRadiusEsp=false,autoParryRadius=10,aimStrictness=0.1,ignoredSkillsKiller=false,ignoredTheHidden=false,ignoredTheAbysswalker=false,ignoredTheMaskedDuck=false,lastParryTime=0,lastSkillParryTime=0,activeAttackers={},activeSkillAttackers={}}
 local MasterTasks={}
 local function RegisterTask(name,interval,fn)
     MasterTasks[#MasterTasks+1]={name=name,interval=interval,timer=0,fn=fn}
@@ -20,7 +20,8 @@ end
 local toggleAutoParryESP
 do
     local INSTANT_ANIM_ID="rbxassetid://98163597193511"
-    local IGNORED_KILLER_NAME="the hidden"
+    local SKILL_ANIM_ID=98163597193511
+    local SKILL_PARRY_RADIUS=15
     local SKILL_ANIMS={[98163597193511]=true}
     local FAST_ATTACK_ANIMS={
         [113255068724446]=true,
@@ -30,7 +31,9 @@ do
         [121216847022485]=true,
         [111920872708571]=true,
         [138720291317243]=true,
-        [106871536134254]=true
+        [106871536134254]=true,
+        [139369275981139]=true,
+        [110355011987939]=true
     }
     local ATTACK_ANIMS={
         [78432063483146]=true,[121216847022485]=true,
@@ -122,36 +125,24 @@ do
         STATE.lastParryTime=tick()
         sendParryInput()
     end
-    local function doHiddenSkillParry()
-        if not STATE.autoParryEnabled then return end
-        if not STATE.ignoredSkillsKiller then return end
+    local function doSkillParry()
+        if not STATE.autoParryEnabled or not STATE.ignoredSkillsKiller then return end
+        local now=tick()
+        if now-STATE.lastSkillParryTime<0.005 then return end
+        STATE.lastSkillParryTime=now
         sendParryInput()
     end
-    local function isHiddenKiller(killerName)
-        return typeof(killerName)=="string" and killerName:lower()==IGNORED_KILLER_NAME
-    end
-    local function hiddenSkillComingToPlayer(killerChar)
-        local localChar=localPlayer.Character
-        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
-        if not localRoot or not killerRoot then return false end
-        local direction=localRoot.Position-killerRoot.Position
-        direction=Vector3.new(direction.X,0,direction.Z)
-        if direction.Magnitude<=0.01 then return true end
-        direction=direction.Unit
-        local facing=killerRoot.CFrame.LookVector
-        local flatFacing=Vector3.new(facing.X,0,facing.Z)
-        if flatFacing.Magnitude<=0.01 then return false end
-        flatFacing=flatFacing.Unit
-        local dot=flatFacing:Dot(direction)
-        if dot<STATE.aimStrictness then return false end
-        local velocity=killerRoot.AssemblyLinearVelocity
-        local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
-        if flatVelocity.Magnitude>2 then
-            local velocityDot=flatVelocity.Unit:Dot(direction)
-            if velocityDot<0 then return false end
+    local function isIgnoredSkillKiller(killerName)
+        if typeof(killerName)~="string" then return false end
+        local name=killerName:lower()
+        if name=="the hidden" then
+            return STATE.ignoredTheHidden
+        elseif name=="the abysswalker" then
+            return STATE.ignoredTheAbysswalker
+        elseif name=="the masked (duck)" or name=="the masked" then
+            return STATE.ignoredTheMaskedDuck
         end
-        return true
+        return false
     end
     local function validateAndParry(killerChar,killerName,instant,extraRadius)
         local localChar=localPlayer.Character
@@ -257,21 +248,31 @@ do
             data.consumed=true
         end
     end
-    local function registerHiddenSkill(char,kName,track)
-        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,hiddenSkill=true}
-        STATE.activeAttackers[char]=data
-        if STATE.ignoredSkillsKiller and hiddenSkillComingToPlayer(char) then
-            doHiddenSkillParry()
-            data.consumed=true
-        end
+    local function registerSkillAttack(char,kName,track)
+        if not STATE.ignoredSkillsKiller or not isIgnoredSkillKiller(kName) then return end
+        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=SKILL_ANIM_ID}
+        STATE.activeSkillAttackers[char]=data
         local conn
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
-            task.delay(0.15,function()
-                if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then
-                    STATE.activeAttackers[char]=nil
+            task.defer(function()
+                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
+                    STATE.activeSkillAttackers[char]=nil
                 end
             end)
+        end)
+        task.defer(function()
+            if not STATE.autoParryEnabled or not STATE.ignoredSkillsKiller then return end
+            if STATE.activeSkillAttackers[char]~=data then return end
+            local localChar=localPlayer.Character
+            local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+            local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
+            if localRoot and killerRoot then
+                if (localRoot.Position-killerRoot.Position).Magnitude<=SKILL_PARRY_RADIUS then
+                    doSkillParry()
+                    data.consumed=true
+                end
+            end
         end)
     end
     local function OnParryCharacterAdded(player,char)
@@ -289,8 +290,8 @@ do
                         if not STATE.autoParryEnabled then return end
                         if not track or not track.Animation then return end
                         local animId=track.Animation.AnimationId
-                        if animId==INSTANT_ANIM_ID and isHiddenKiller(kName) and SKILL_ANIMS[98163597193511] then
-                            registerHiddenSkill(char,kName,track)
+                        if animId==INSTANT_ANIM_ID and SKILL_ANIMS[SKILL_ANIM_ID] then
+                            registerSkillAttack(char,kName,track)
                             return
                         end
                         local animType=VALID_ANIM_IDS[animId]
@@ -348,13 +349,29 @@ do
                 local localChar=localPlayer.Character
                 local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
                 if killerRoot and localRoot then
-                    if data.hiddenSkill and data.track.Animation and data.track.Animation.AnimationId==INSTANT_ANIM_ID then
-                        if not data.consumed and STATE.ignoredSkillsKiller and isHiddenKiller(data.name) and hiddenSkillComingToPlayer(killerChar) then
-                            doHiddenSkillParry()
-                            data.consumed=true
-                        end
-                    elseif data.type=="attack" or data.type=="lungehold" then
+                    if data.type=="attack" or data.type=="lungehold" then
                         tryNormalParry(killerChar,data.name,data)
+                    end
+                end
+            end
+        end
+    end)
+    RegisterTask("SkillAttackersMonitor",0,function()
+        if not STATE.autoParryEnabled or not STATE.ignoredSkillsKiller then return end
+        if next(STATE.activeSkillAttackers)==nil then return end
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot then return end
+        for killerChar,data in pairs(STATE.activeSkillAttackers) do
+            if not killerChar or not killerChar.Parent or not data.track or not data.track.IsPlaying then
+                STATE.activeSkillAttackers[killerChar]=nil
+            elseif not data.consumed and isIgnoredSkillKiller(data.name) then
+                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+                if killerRoot then
+                    local distance=(localRoot.Position-killerRoot.Position).Magnitude
+                    if distance<=SKILL_PARRY_RADIUS then
+                        doSkillParry()
+                        data.consumed=true
                     end
                 end
             end
@@ -455,7 +472,10 @@ local function BuildUI()
         Title="Auto Parry",Default=false,
         Callback=function(v)
             STATE.autoParryEnabled=v
-            if not v then STATE.activeAttackers={} end
+            if not v then
+                STATE.activeAttackers={}
+                STATE.activeSkillAttackers={}
+            end
         end,
     })
     APH1:AddToggle({
@@ -467,7 +487,22 @@ local function BuildUI()
     })
     APSection:AddToggle({
         Title="Ignored Skills Killer",Default=false,
-        Callback=function(v) STATE.ignoredSkillsKiller=v end,
+        Callback=function(v)
+            STATE.ignoredSkillsKiller=v
+            if not v then STATE.activeSkillAttackers={} end
+        end,
+    })
+    APSection:AddToggle({
+        Title="The Hidden",Default=false,
+        Callback=function(v) STATE.ignoredTheHidden=v end,
+    })
+    APSection:AddToggle({
+        Title="The Abysswalker",Default=false,
+        Callback=function(v) STATE.ignoredTheAbysswalker=v end,
+    })
+    APSection:AddToggle({
+        Title="The Masked (Duck)",Default=false,
+        Callback=function(v) STATE.ignoredTheMaskedDuck=v end,
     })
     APSection:AddSlider({
         Title="Parry Radius (Stud)",Min=4,Max=40,Default=11,Increment=1,
