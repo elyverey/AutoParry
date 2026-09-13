@@ -21,47 +21,27 @@ local toggleAutoParryESP
 do
     local SKILL_ANIM_ID=98163597193511
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
-    local FAST_ATTACK_ANIMS={
-        [113255068724446]=true,
-        [74968262036854]=true,
-        [105374834496520]=true,
-        [135002183282873]=true,
-        [121216847022485]=true,
-        [111920872708571]=true,
-        [138720291317243]=true,
-        [106871536134254]=true,
-        [139369275981139]=true,
-        [110355011987939]=true
-    }
-    local ATTACK_ANIMS={
-        [78432063483146]=true,[121216847022485]=true,
-        [74968262036854]=true,[113255068724446]=true,[132817836308238]=true,
-        [82666958311998]=true,[111920872708571]=true,[106871536134254]=true,
-        [109402730355822]=true,[130593238885843]=true,[138720291317243]=true,
-        [139369275981139]=true,[133963973694098]=true,[78935059863801]=true
-    }
-    local LUNGE_ANIMS={
-        [118907603246885]=true,[135002183282873]=true,
-        [113255068724446]=true,[129784271201071]=true,
-        [105374834496520]=true,[117070354890871]=true,[115244153053858]=true,
-        [110355011987939]=true,[117042998468241]=true,[122812055447896]=true
-    }
-    local ANIM_LENGTHS={
-        [106871536134254]=3.00,
-        [105374834496520]=1.00,
-        [111920872708571]=1.72,
-        [138720291317243]=1.72,
-        [135002183282873]=1.50,
-        [121216847022485]=1.75
+    local ATTACK_PROFILES={
+        [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
+        [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
+        [135002183282873]={type="lungehold",length=1.50,speed=1.00,triggerProgress=0.015,triggerTime=0.022},
+        [121216847022485]={type="attack",length=1.75,speed=1.00,triggerProgress=0.015,triggerTime=0.025},
+        [117042998468241]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
+        [133963973694098]={type="attack",length=1.72,speed=1.00,triggerProgress=0.016,triggerTime=0.025},
+        [110355011987939]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.012,triggerTime=0.012},
+        [139369275981139]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022},
+        [118907603246885]={type="lungehold",length=0.83,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
+        [78432063483146]={type="attack",length=1.72,speed=1.00,triggerProgress=0.018,triggerTime=0.025},
+        [122812055447896]={type="lungehold",length=0.75,speed=1.00,triggerProgress=0.010,triggerTime=0.008},
+        [78935059863801]={type="attack",length=1.63,speed=1.00,triggerProgress=0.016,triggerTime=0.022},
+        [129784271201071]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.015,triggerTime=0.015},
+        [132817836308238]={type="attack",length=1.72,speed=1.00,triggerProgress=0.017,triggerTime=0.025},
+        [105374834496520]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
+        [111920872708571]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022}
     }
     local VALID_ANIM_IDS={}
-    for id,_ in pairs(ATTACK_ANIMS) do
-        VALID_ANIM_IDS["rbxassetid://"..id]="attack"
-    end
-    for id,_ in pairs(LUNGE_ANIMS) do
-        if not VALID_ANIM_IDS["rbxassetid://"..id] then
-            VALID_ANIM_IDS["rbxassetid://"..id]="lungehold"
-        end
+    for id,profile in pairs(ATTACK_PROFILES) do
+        VALID_ANIM_IDS["rbxassetid://"..id]=profile
     end
     local function getKillerName(player,char)
         if not player or not char then return nil end
@@ -147,11 +127,9 @@ do
         return (localRoot.Position-killerRoot.Position).Magnitude
     end
     local function trySkillParry(char,data)
-        if data.consumed then return end
-        if not STATE.autoParryEnabled then return end
+        if data.consumed or not STATE.autoParryEnabled then return end
         if isIgnoredSkillKiller(data.name) then return end
-        local distance=getSkillDistance(char)
-        if distance<=STATE.autoParryRadius then
+        if getSkillDistance(char)<=STATE.autoParryRadius then
             data.consumed=true
             doSkillParry()
         end
@@ -190,19 +168,18 @@ do
                             registerSkillAttack(char,kName,track)
                             return
                         end
-                        local animType=VALID_ANIM_IDS[animId]
-                        if not animType then return end
+                        local profile=VALID_ANIM_IDS[animId]
+                        if not profile then return end
                         local numericId=tonumber(animId:match("%d+"))
                         local data={
                             name=kName,
                             track=track,
-                            type=animType,
+                            type=profile.type,
                             id=numericId,
+                            profile=profile,
                             started=tick(),
                             consumed=false,
-                            lastTimePosition=-1,
-                            hiddenSkill=false,
-                            fastAttack=FAST_ATTACK_ANIMS[numericId] or false
+                            lastTimePosition=-1
                         }
                         STATE.activeAttackers[char]=data
                         local conn
@@ -240,58 +217,39 @@ do
                 STATE.activeAttackers[killerChar]=nil
             elseif not data.track.IsPlaying then
                 STATE.activeAttackers[killerChar]=nil
-            else
+            elseif not data.consumed then
+                local profile=data.profile
                 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                 local localChar=localPlayer.Character
                 local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-                if killerRoot and localRoot then
-                    if data.type=="attack" or data.type=="lungehold" then
-                        local position=data.track.TimePosition or 0
-                        local length=data.track.Length or 0
-                        local knownLength=ANIM_LENGTHS[data.id]
-                        local effectiveLength=knownLength or length
-                        local isFastAttack=FAST_ATTACK_ANIMS[data.id] or false
-                        local minPosition=isFastAttack and 0.018 or 0.06
-                        local minProgress=isFastAttack and 0.012 or 0.04
-                        if effectiveLength<=1.05 and isFastAttack then
-                            minPosition=0.018
-                            minProgress=0.012
-                        elseif effectiveLength<=1.55 and isFastAttack then
-                            minPosition=0.022
-                            minProgress=0.014
-                        elseif effectiveLength<=1.80 and isFastAttack then
-                            minPosition=0.025
-                            minProgress=0.015
-                        elseif effectiveLength>1.80 and isFastAttack then
-                            minPosition=0.035
-                            minProgress=0.018
-                        end
-                        if position>=minPosition and (effectiveLength<=0 or position/effectiveLength>=minProgress) and (effectiveLength<=0 or position/effectiveLength<=0.985) then
-                            local weight=data.track.WeightCurrent or 0
-                            local priority=data.track.Priority
-                            if weight>0.005 and priority~=Enum.AnimationPriority.Core and priority~=Enum.AnimationPriority.Idle and priority~=Enum.AnimationPriority.Movement then
-                                if not data.lastTimePosition or position+0.0001>=data.lastTimePosition then
-                                    data.lastTimePosition=position
-                                    local extraRadius=data.fastAttack and 2 or 0
-                                    local maxRadius=STATE.autoParryRadius+extraRadius
-                                    local distance=(localRoot.Position-killerRoot.Position).Magnitude
-                                    if distance<=maxRadius then
-                                        local ping=Players.LocalPlayer:GetNetworkPing()
-                                        local clampedPing=math.clamp(ping,0,0.3)
-                                        local velocity=killerRoot.AssemblyLinearVelocity
-                                        local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
-                                        local predictedPos=killerRoot.Position+(flatVelocity*clampedPing)
-                                        local predictedDistance=(localRoot.Position-predictedPos).Magnitude
-                                        if predictedDistance<=maxRadius+2 then
-                                            local directionToPlayer=localRoot.Position-killerRoot.Position
-                                            if directionToPlayer.Magnitude<=0 or flatVelocity.Magnitude<=8 or flatVelocity.Unit:Dot(directionToPlayer.Unit)>=-0.1 then
-                                                doParry()
-                                                data.consumed=true
-                                            end
-                                        end
-                                    end
-                                else
-                                    data.lastTimePosition=position
+                if killerRoot and localRoot and profile then
+                    local position=data.track.TimePosition or 0
+                    local realLength=data.track.Length
+                    local length=(realLength and realLength>0) and realLength or profile.length
+                    local speed=data.track.Speed
+                    if not speed or speed<=0 then speed=profile.speed end
+                    local normalizedTime=position*speed
+                    local normalizedLength=length/speed
+                    local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
+                    local triggerTime=profile.triggerTime/profile.speed
+                    local triggerProgress=profile.triggerProgress
+                    if position>=triggerTime or progress>=triggerProgress then
+                        local distance=(localRoot.Position-killerRoot.Position).Magnitude
+                        if distance<=STATE.autoParryRadius then
+                            local velocity=killerRoot.AssemblyLinearVelocity
+                            local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
+                            local direction=localRoot.Position-killerRoot.Position
+                            local movingCorrectly=true
+                            if direction.Magnitude>0 and flatVelocity.Magnitude>8 then
+                                movingCorrectly=flatVelocity.Unit:Dot(direction.Unit)>=-0.1
+                            end
+                            if movingCorrectly then
+                                local ping=math.clamp(Players.LocalPlayer:GetNetworkPing(),0,0.3)
+                                local predictedPos=killerRoot.Position+(flatVelocity*ping)
+                                local predictedDistance=(localRoot.Position-predictedPos).Magnitude
+                                if predictedDistance<=STATE.autoParryRadius+2 then
+                                    doParry()
+                                    data.consumed=true
                                 end
                             end
                         end
@@ -436,19 +394,27 @@ local function BuildUI()
     })
     APSection:AddToggle({
         Title="The Abysswalker",Default=false,
-        Callback=function(v) STATE.ignoredTheAbysswalker=v end,
+        Callback=function(v)
+            STATE.ignoredTheAbysswalker=v
+        end,
     })
     APSection:AddToggle({
         Title="The Masked (Duck)",Default=false,
-        Callback=function(v) STATE.ignoredTheMaskedDuck=v end,
+        Callback=function(v)
+            STATE.ignoredTheMaskedDuck=v
+        end,
     })
     APSection:AddSlider({
         Title="Parry Radius (Stud)",Min=4,Max=40,Default=11,Increment=1,
-        Callback=function(v) STATE.autoParryRadius=v end,
+        Callback=function(v)
+            STATE.autoParryRadius=v
+        end,
     })
     APSection:AddSlider({
         Title="Aim Strictness",Min=-1,Max=1,Default=0.1,Increment=0.1,
-        Callback=function(v) STATE.aimStrictness=v end,
+        Callback=function(v)
+            STATE.aimStrictness=v
+        end,
     })
 end
 BuildUI()
