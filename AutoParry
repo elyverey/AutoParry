@@ -22,11 +22,19 @@ do
     local SKILL_START_ID=98163597193511
     local SKILL_LUNGE_ID=88848807662765
     local HIDDEN_SKILL_ID=123809268724645
+    local MASKED_LUNGE_ID=117070354890871
+    local MASKED_ATTACK_ID=106871536134254
     local SKILL_START_ANIM="rbxassetid://"..SKILL_START_ID
     local SKILL_LUNGE_ANIM="rbxassetid://"..SKILL_LUNGE_ID
     local HIDDEN_SKILL_ANIM="rbxassetid://"..HIDDEN_SKILL_ID
+    local MASKED_LUNGE_ANIM="rbxassetid://"..MASKED_LUNGE_ID
+    local MASKED_ATTACK_ANIM="rbxassetid://"..MASKED_ATTACK_ID
     local SKILL_DETECTION_RANGE=50
-    local SKILL_CHAIN_TIMEOUT=3
+    local SKILL_WALLCHECK_EDGE=45
+    local SKILL_MIN_APPROACH_SPEED=1.5
+    local SKILL_APPROACH_DOT=-0.05
+    local SKILL_MIN_TRACK_TIME=0.01
+    local SKILL_STATE_TIMEOUT=3
     local ATTACK_PROFILES={
         [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
         [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
@@ -127,17 +135,70 @@ do
         local b=killerRoot.Position
         return (Vector3.new(a.X,0,a.Z)-Vector3.new(b.X,0,b.Z)).Magnitude
     end
-    local function parrySkillImmediately(char,data)
+    local function isWallBlocked(char)
+        local localRoot=getLocalRoot()
+        local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
+        if not localRoot or not killerRoot then return true end
+        local origin=killerRoot.Position
+        local target=localRoot.Position
+        local direction=target-origin
+        if direction.Magnitude<=0.1 then return false end
+        local params=RaycastParams.new()
+        params.FilterType=Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances={char,localPlayer.Character}
+        params.IgnoreWater=true
+        local result=Workspace:Raycast(origin,direction,params)
+        if not result then return false end
+        local hit=result.Instance
+        if not hit then return false end
+        if hit:IsDescendantOf(char) or (localPlayer.Character and hit:IsDescendantOf(localPlayer.Character)) then return false end
+        return true
+    end
+    local function getSkillRushInfo(char,data,range)
+        local localRoot=getLocalRoot()
+        local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
+        if not localRoot or not killerRoot then return false,math.huge,0,0,false end
+        local localPos=Vector3.new(localRoot.Position.X,0,localRoot.Position.Z)
+        local killerPos=Vector3.new(killerRoot.Position.X,0,killerRoot.Position.Z)
+        local offset=localPos-killerPos
+        local distance=offset.Magnitude
+        if distance>range then return false,distance,0,0,false end
+        if data.track and data.track.IsPlaying then
+            local timePosition=data.track.TimePosition or 0
+            if timePosition<SKILL_MIN_TRACK_TIME then return false,distance,0,0,false end
+        end
+        local killerVelocity=killerRoot.AssemblyLinearVelocity
+        local localVelocity=localRoot.AssemblyLinearVelocity
+        local relativeVelocity=Vector3.new(killerVelocity.X-localVelocity.X,0,killerVelocity.Z-localVelocity.Z)
+        local relativeSpeed=relativeVelocity.Magnitude
+        if distance<=0.05 then return true,distance,relativeSpeed,1,true end
+        local directionDot=relativeSpeed>0 and relativeVelocity.Unit:Dot(offset.Unit) or 0
+        local approaching=relativeSpeed>=SKILL_MIN_APPROACH_SPEED and directionDot>SKILL_APPROACH_DOT
+        local previous=data.lastPosition
+        local movedToward=false
+        if previous then
+            local previousPos=Vector3.new(previous.X,0,previous.Z)
+            local previousDistance=(localPos-previousPos).Magnitude
+            if previousDistance-distance>0.05 then movedToward=true end
+        end
+        data.lastPosition=killerRoot.Position
+        if approaching or movedToward then
+            return true,distance,relativeSpeed,directionDot,true
+        end
+        return false,distance,relativeSpeed,directionDot,false
+    end
+    local function canSkillParry(char,data)
         if not STATE.autoParryEnabled or data.consumed then return false end
         if isIgnoredSkillKiller(data.name) then return false end
-        local distance=getFlatDistance(char)
-        if distance<=SKILL_DETECTION_RANGE then
-            if doParry(true) then
-                data.consumed=true
-                return true
-            end
+        local range=data.useRealRadius and STATE.autoParryRadius or SKILL_DETECTION_RANGE
+        local valid,distance=getSkillRushInfo(char,data,range)
+        if not valid then return false end
+        if not data.useRealRadius and distance<=SKILL_WALLCHECK_EDGE then
+            if isWallBlocked(char) then return false end
+        elseif data.useRealRadius then
+            if isWallBlocked(char) then return false end
         end
-        return false
+        return true
     end
     local function registerSkillStart(char,kName,track)
         if isIgnoredSkillKiller(kName) then return end
@@ -145,34 +206,28 @@ do
         if state then
             state.started=tick()
             state.track=track
-            state.startPlaying=true
             return
         end
-        STATE.skillStates[char]={name=kName,started=tick(),track=track,startPlaying=true,lunging=false}
+        STATE.skillStates[char]={name=kName,started=tick(),track=track}
         local conn
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.delay(0.15,function()
                 local current=STATE.skillStates[char]
-                if current and current.track==track and not current.lunging then
-                    STATE.skillStates[char]=nil
-                end
+                if current and current.track==track then STATE.skillStates[char]=nil end
             end)
         end)
     end
-    local function registerSpecialSkill(char,kName,track,skillId,hiddenOnly)
+    local function registerSpecialSkill(char,kName,track,skillId,hiddenOnly,useRealRadius)
         if hiddenOnly and kName:lower()~="the hidden" then return end
         if isIgnoredSkillKiller(kName) then return end
-        local data={name=kName,track=track,type="special_skill",started=tick(),consumed=false,skillId=skillId}
+        local data={name=kName,track=track,type="special_skill",started=tick(),consumed=false,skillId=skillId,lastPosition=nil,useRealRadius=useRealRadius==true}
         STATE.activeSkillAttackers[char]=data
-        parrySkillImmediately(char,data)
         local conn
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.delay(0.08,function()
-                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
-                    STATE.activeSkillAttackers[char]=nil
-                end
+                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then STATE.activeSkillAttackers[char]=nil end
             end)
         end)
     end
@@ -200,31 +255,44 @@ do
                         if not STATE.autoParryEnabled then return end
                         if not track or not track.Animation then return end
                         local animId=track.Animation.AnimationId
+                        local lowerName=kName:lower()
                         if animId==SKILL_START_ANIM then
                             registerSkillStart(char,kName,track)
                             return
                         end
                         if animId==SKILL_LUNGE_ANIM then
-                            registerSpecialSkill(char,kName,track,SKILL_LUNGE_ID,false)
+                            registerSpecialSkill(char,kName,track,SKILL_LUNGE_ID,false,false)
                             return
                         end
                         if animId==HIDDEN_SKILL_ANIM then
-                            registerSpecialSkill(char,kName,track,HIDDEN_SKILL_ID,true)
+                            if lowerName=="the hidden" then
+                                registerSpecialSkill(char,kName,track,HIDDEN_SKILL_ID,true,false)
+                            end
+                            return
+                        end
+                        if animId==MASKED_LUNGE_ANIM then
+                            if lowerName=="the masked" or lowerName=="the masked (duck)" then
+                                registerSpecialSkill(char,kName,track,MASKED_LUNGE_ID,false,true)
+                            end
+                            return
+                        end
+                        if animId==MASKED_ATTACK_ANIM then
+                            if lowerName=="the masked" or lowerName=="the masked (duck)" then
+                                registerSpecialSkill(char,kName,track,MASKED_ATTACK_ID,false,true)
+                            end
                             return
                         end
                         local profile=VALID_ANIM_IDS[animId]
                         if not profile then return end
                         local old=STATE.activeAttackers[char]
-                        if old and old.track and old.track.IsPlaying then
-                            if old.profile and old.profile.type=="lungehold" and profile.type=="attack" then
-                                old.track=track
-                                old.profile=profile
-                                old.type=profile.type
-                                old.id=tonumber(animId:match("%d+"))
-                                old.started=tick()
-                                old.consumed=false
-                                return
-                            end
+                        if old and old.track and old.track.IsPlaying and old.profile and old.profile.type=="lungehold" and profile.type=="attack" then
+                            old.track=track
+                            old.profile=profile
+                            old.type=profile.type
+                            old.id=tonumber(animId:match("%d+"))
+                            old.started=tick()
+                            old.consumed=false
+                            return
                         end
                         local numericId=tonumber(animId:match("%d+"))
                         local data={name=kName,track=track,type=profile.type,id=numericId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1}
@@ -233,9 +301,7 @@ do
                         conn=track.Stopped:Connect(function()
                             if conn then conn:Disconnect() end
                             task.delay(0.12,function()
-                                if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then
-                                    STATE.activeAttackers[char]=nil
-                                end
+                                if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then STATE.activeAttackers[char]=nil end
                             end)
                         end)
                     end)
@@ -322,28 +388,41 @@ do
             elseif not data.track.IsPlaying then
                 STATE.activeSkillAttackers[killerChar]=nil
             elseif not data.consumed then
-                parrySkillImmediately(killerChar,data)
+                if canSkillParry(killerChar,data) then
+                    if doParry(true) then data.consumed=true end
+                end
             end
         end
     end)
     RegisterTask("SkillStartFallback",0,function()
         if not STATE.autoParryEnabled then return end
         for killerChar,state in pairs(STATE.skillStates) do
-            if killerChar and killerChar.Parent and state and state.started and tick()-state.started<=SKILL_CHAIN_TIMEOUT then
+            if killerChar and killerChar.Parent and state and state.started and tick()-state.started<=SKILL_STATE_TIMEOUT then
                 local humanoid=killerChar:FindFirstChildOfClass("Humanoid")
                 local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
                 if animator then
                     for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
                         if track.Animation then
                             local animId=track.Animation.AnimationId
+                            local lowerName=state.name:lower()
                             if animId==SKILL_LUNGE_ANIM then
                                 if not STATE.activeSkillAttackers[killerChar] then
-                                    registerSpecialSkill(killerChar,state.name,track,SKILL_LUNGE_ID,false)
+                                    registerSpecialSkill(killerChar,state.name,track,SKILL_LUNGE_ID,false,false)
                                 end
                                 break
-                            elseif animId==HIDDEN_SKILL_ANIM and state.name:lower()=="the hidden" then
+                            elseif animId==HIDDEN_SKILL_ANIM and lowerName=="the hidden" then
                                 if not STATE.activeSkillAttackers[killerChar] then
-                                    registerSpecialSkill(killerChar,state.name,track,HIDDEN_SKILL_ID,true)
+                                    registerSpecialSkill(killerChar,state.name,track,HIDDEN_SKILL_ID,true,false)
+                                end
+                                break
+                            elseif animId==MASKED_LUNGE_ANIM and (lowerName=="the masked" or lowerName=="the masked (duck)") then
+                                if not STATE.activeSkillAttackers[killerChar] then
+                                    registerSpecialSkill(killerChar,state.name,track,MASKED_LUNGE_ID,false,true)
+                                end
+                                break
+                            elseif animId==MASKED_ATTACK_ANIM and (lowerName=="the masked" or lowerName=="the masked (duck)") then
+                                if not STATE.activeSkillAttackers[killerChar] then
+                                    registerSpecialSkill(killerChar,state.name,track,MASKED_ATTACK_ID,false,true)
                                 end
                                 break
                             end
@@ -357,7 +436,7 @@ do
         if not STATE.autoParryEnabled then return end
         local now=tick()
         for killerChar,state in pairs(STATE.skillStates) do
-            if not killerChar or not killerChar.Parent or now-state.started>SKILL_CHAIN_TIMEOUT then
+            if not killerChar or not killerChar.Parent or now-state.started>SKILL_STATE_TIMEOUT then
                 STATE.skillStates[killerChar]=nil
             end
         end
