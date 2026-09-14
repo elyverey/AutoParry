@@ -21,11 +21,13 @@ local toggleAutoParryESP
 do
     local SKILL_ANIM_ID=98163597193511
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
-    local FAST_ANIM_IDS={
-        [117070354890871]=true,
-        [106871536134254]=true,
-        [109402730355822]=true
-    }
+    local HIDDEN_RANGE=15
+    local HIDDEN_PREDICT_TIME=0.12
+    local CLOSE_RANGE=4.5
+    local HARD_CLOSE_RANGE=2.75
+    local MIN_CLOSING_SPEED=2
+    local EMERGENCY_TIME=0.18
+    local VAULT_EXTRA_RANGE=2.25
     local ATTACK_PROFILES={
         [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
         [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
@@ -42,28 +44,11 @@ do
         [129784271201071]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.015,triggerTime=0.015},
         [132817836308238]={type="attack",length=1.72,speed=1.00,triggerProgress=0.017,triggerTime=0.025},
         [105374834496520]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
-        [111920872708571]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022},
-        [117070354890871]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010}
+        [111920872708571]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022}
     }
     local VALID_ANIM_IDS={}
     for id,profile in pairs(ATTACK_PROFILES) do
         VALID_ANIM_IDS["rbxassetid://"..id]=profile
-    end
-    local function getCharacterRoot(char)
-        if not char then return nil end
-        return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
-    end
-    local function hasClearAttackPath(localRoot,killerRoot,killerChar)
-        if not localRoot or not killerRoot or not killerChar then return false end
-        local origin=localRoot.Position
-        local direction=killerRoot.Position-origin
-        if direction.Magnitude>STATE.autoParryRadius then return false end
-        local params=RaycastParams.new()
-        params.FilterType=Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances={localPlayer.Character,killerChar}
-        params.IgnoreWater=true
-        local result=Workspace:Raycast(origin,direction,params)
-        return result==nil
     end
     local function getKillerName(player,char)
         if not player or not char then return nil end
@@ -104,28 +89,12 @@ do
                 VirtualInputManager:SendMouseButtonEvent(0,0,1,true,game,0)
             end
         end
-        local root=getCharacterRoot(char)
+        local root=char:FindFirstChild("HumanoidRootPart")
         if root then
             pcall(function()
                 if CollectionService:HasTag(root,"doing action") then CollectionService:RemoveTag(root,"doing action") end
             end)
         end
-    end
-    local function doParry(force)
-        if not STATE.autoParryEnabled then return false end
-        local now=tick()
-        if now-STATE.lastParryTime<0.01 then return false end
-        STATE.lastParryTime=now
-        sendParryInput()
-        return true
-    end
-    local function doSkillParry()
-        if not STATE.autoParryEnabled then return false end
-        local now=tick()
-        if now-STATE.lastParryTime<0.01 then return false end
-        STATE.lastParryTime=now
-        sendParryInput()
-        return true
     end
     local function isIgnoredSkillKiller(killerName)
         if typeof(killerName)~="string" then return false end
@@ -139,32 +108,111 @@ do
         end
         return false
     end
+    local function getObstacleName(instance)
+        if not instance then return "" end
+        local name=tostring(instance.Name):lower()
+        local parent=instance.Parent
+        if parent then
+            local pn=tostring(parent.Name):lower()
+            if pn:find("vault") or pn:find("window") or pn:find("pallet") then
+                name=name.." "..pn
+            end
+        end
+        return name
+    end
+    local function isVaultObstacle(instance)
+        local name=getObstacleName(instance)
+        return name:find("vault")~=nil or name:find("window")~=nil
+    end
+    local function isHardObstacle(instance)
+        local name=getObstacleName(instance)
+        if name:find("wall") or name:find("pallet") or name:find("door") or name:find("barrier") or name:find("block") then
+            return true
+        end
+        return not isVaultObstacle(instance)
+    end
+    local rayParams=RaycastParams.new()
+    rayParams.FilterType=Enum.RaycastFilterType.Exclude
+    rayParams.IgnoreWater=true
+    local function checkAttackPath(killerChar,allowVault)
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot or not killerRoot then return false end
+        rayParams.FilterDescendantsInstances={localChar,killerChar}
+        local a=localRoot.Position
+        local b=killerRoot.Position
+        local delta=b-a
+        if delta.Magnitude<=0.05 then return true end
+        local offsets={Vector3.new(0,0,0),Vector3.new(0,1.15,0),Vector3.new(0,-1.0,0)}
+        local vaultBlocked=false
+        for i=1,#offsets do
+            local origin=a+offsets[i]
+            local target=b+offsets[i]
+            local result=Workspace:Raycast(origin,target-origin,rayParams)
+            if not result then return true end
+            if isVaultObstacle(result.Instance) then
+                vaultBlocked=true
+            elseif isHardObstacle(result.Instance) then
+                return false
+            end
+        end
+        if allowVault and vaultBlocked then
+            local distance=delta.Magnitude
+            if distance<=HIDDEN_RANGE+VAULT_EXTRA_RANGE then return true end
+        end
+        return false
+    end
+    local function canParryAgainst(killerChar,distance,allowVault)
+        if not killerChar or not killerChar.Parent then return false end
+        if distance<=2.25 then
+            return checkAttackPath(killerChar,allowVault)
+        end
+        if distance>STATE.autoParryRadius+(allowVault and VAULT_EXTRA_RANGE or 0) then return false end
+        return checkAttackPath(killerChar,allowVault)
+    end
+    local function doParry(force,killerChar)
+        if not STATE.autoParryEnabled then return false end
+        if killerChar and not canParryAgainst(killerChar,math.huge,false) then return false end
+        local now=tick()
+        if now-STATE.lastParryTime<0.01 then return false end
+        STATE.lastParryTime=now
+        sendParryInput()
+        return true
+    end
+    local function doSkillParry(killerChar)
+        if not STATE.autoParryEnabled then return false end
+        if killerChar and not canParryAgainst(killerChar,HIDDEN_RANGE,true) then return false end
+        local now=tick()
+        if now-STATE.lastParryTime<0.01 then return false end
+        STATE.lastParryTime=now
+        sendParryInput()
+        return true
+    end
     local function getSkillDistance(char)
-        local localRoot=getCharacterRoot(localPlayer.Character)
-        local killerRoot=getCharacterRoot(char)
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
         if not localRoot or not killerRoot then return math.huge end
         return (localRoot.Position-killerRoot.Position).Magnitude
     end
-    local function trySkillParry(char,data)
-        if data.consumed or not STATE.autoParryEnabled then return end
-        if isIgnoredSkillKiller(data.name) then return end
-        if getSkillDistance(char)<=STATE.autoParryRadius then
-            if doSkillParry() then data.consumed=true end
-        end
-    end
     local function registerSkillAttack(char,kName,track)
         if isIgnoredSkillKiller(kName) then return end
-        local numericId=tonumber(track.Animation.AnimationId:match("%d+")) or SKILL_ANIM_ID
-        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=numericId}
+        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=SKILL_ANIM_ID}
         STATE.activeSkillAttackers[char]=data
         local conn
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.defer(function()
-                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then STATE.activeSkillAttackers[char]=nil end
+                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
+                    STATE.activeSkillAttackers[char]=nil
+                end
             end)
         end)
-        trySkillParry(char,data)
+        local distance=getSkillDistance(char)
+        if distance<=HIDDEN_RANGE and not data.consumed then
+            if doSkillParry(char) then data.consumed=true end
+        end
     end
     local function OnParryCharacterAdded(player,char)
         if player==localPlayer then return end
@@ -189,32 +237,22 @@ do
                         if not STATE.autoParryEnabled then return end
                         if not track or not track.Animation then return end
                         local animId=track.Animation.AnimationId
-                        local numericId=tonumber(animId:match("%d+"))
                         if animId==INSTANT_ANIM_ID then
                             registerSkillAttack(char,kName,track)
                             return
                         end
-                        if numericId==106871536134254 or numericId==109402730355822 then
-                            local data={name=kName,track=track,type="skill",id=numericId,skillId=numericId,started=tick(),consumed=false,fast=true}
-                            STATE.activeSkillAttackers[char]=data
-                            local conn
-                            conn=track.Stopped:Connect(function()
-                                if conn then conn:Disconnect() end
-                                task.defer(function()
-                                    if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then STATE.activeSkillAttackers[char]=nil end
-                                end)
-                            end)
-                            return
-                        end
                         local profile=VALID_ANIM_IDS[animId]
                         if not profile then return end
-                        local data={name=kName,track=track,type=profile.type,id=numericId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1,fast=FAST_ANIM_IDS[numericId]==true}
+                        local numericId=tonumber(animId:match("%d+"))
+                        local data={name=kName,track=track,type=profile.type,id=numericId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1}
                         STATE.activeAttackers[char]=data
                         local conn
                         conn=track.Stopped:Connect(function()
                             if conn then conn:Disconnect() end
                             task.delay(0.15,function()
-                                if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then STATE.activeAttackers[char]=nil end
+                                if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then
+                                    STATE.activeAttackers[char]=nil
+                                end
                             end)
                         end)
                     end)
@@ -224,7 +262,9 @@ do
     end
     local function OnParryPlayerAdded(player)
         if player==localPlayer then return end
-        if player.Character then task.spawn(function() OnParryCharacterAdded(player,player.Character) end) end
+        if player.Character then
+            task.spawn(function() OnParryCharacterAdded(player,player.Character) end)
+        end
         player.CharacterAdded:Connect(function(char)
             task.spawn(function() OnParryCharacterAdded(player,char) end)
         end)
@@ -235,15 +275,17 @@ do
     Players.PlayerAdded:Connect(OnParryPlayerAdded)
     RegisterTask("CloseRangeMonitor",0,function()
         if not STATE.autoParryEnabled then return end
-        local localRoot=getCharacterRoot(localPlayer.Character)
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         if not localRoot then return end
+        local localPos=localRoot.Position
         for killerChar,killerData in pairs(STATE.killerCharacters) do
             if not killerChar or not killerChar.Parent then
                 STATE.killerCharacters[killerChar]=nil
             else
-                local killerRoot=getCharacterRoot(killerChar)
+                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                 if killerRoot then
-                    local offset=localRoot.Position-killerRoot.Position
+                    local offset=localPos-killerRoot.Position
                     local flatOffset=Vector3.new(offset.X,0,offset.Z)
                     local distance=flatOffset.Magnitude
                     local killerVelocity=killerRoot.AssemblyLinearVelocity
@@ -253,24 +295,19 @@ do
                     if distance>0 then closingSpeed=relativeVelocity:Dot(flatOffset.Unit) end
                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
                     local predictedKiller=killerRoot.Position+Vector3.new(killerVelocity.X,0,killerVelocity.Z)*ping
-                    local predictedLocal=localRoot.Position+Vector3.new(localVelocity.X,0,localVelocity.Z)*ping
+                    local predictedLocal=localPos+Vector3.new(localVelocity.X,0,localVelocity.Z)*ping
                     local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
                     local shouldEmergency=false
-                    if distance<=2.75 then
+                    if distance<=HARD_CLOSE_RANGE then
                         shouldEmergency=true
-                    elseif distance<=4.5 and closingSpeed>=2 then
+                    elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
                         local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=0.18 or predictedDistance<=3.75 then shouldEmergency=true end
+                        if timeToImpact<=EMERGENCY_TIME or predictedDistance<=3.75 then shouldEmergency=true end
                     end
                     if shouldEmergency then
                         local data=STATE.activeAttackers[killerChar]
-                        local skillData=STATE.activeSkillAttackers[killerChar]
-                        if data or skillData then
-                            if skillData and not skillData.consumed then
-                                if doSkillParry() then skillData.consumed=true end
-                            elseif data and not data.consumed then
-                                if doParry(true) then data.consumed=true end
-                            end
+                        if data and not data.consumed then
+                            if doParry(true,killerChar) then data.consumed=true end
                         end
                     end
                 end
@@ -280,6 +317,10 @@ do
     RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot then return end
+        local localPos=localRoot.Position
         for killerChar,data in pairs(STATE.activeAttackers) do
             if not killerChar or not killerChar.Parent or not data.track then
                 STATE.activeAttackers[killerChar]=nil
@@ -287,10 +328,9 @@ do
                 STATE.activeAttackers[killerChar]=nil
             elseif not data.consumed then
                 local profile=data.profile
-                local killerRoot=getCharacterRoot(killerChar)
-                local localRoot=getCharacterRoot(localPlayer.Character)
-                if killerRoot and localRoot and profile then
-                    local offset=localRoot.Position-killerRoot.Position
+                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+                if killerRoot and profile then
+                    local offset=localPos-killerRoot.Position
                     local distance=offset.Magnitude
                     local velocity=killerRoot.AssemblyLinearVelocity
                     local localVelocity=localRoot.AssemblyLinearVelocity
@@ -302,14 +342,14 @@ do
                         closingSpeed=Vector3.new(flatVelocity.X-flatLocalVelocity.X,0,flatVelocity.Z-flatLocalVelocity.Z):Dot(flatOffset.Unit)
                     end
                     local emergency=false
-                    if distance<=2.75 then
+                    if distance<=HARD_CLOSE_RANGE then
                         emergency=true
-                    elseif distance<=4.5 and closingSpeed>=2 then
+                    elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
                         local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=0.18 then emergency=true end
+                        if timeToImpact<=EMERGENCY_TIME then emergency=true end
                     end
                     if emergency then
-                        if doParry(true) then data.consumed=true end
+                        if doParry(true,killerChar) then data.consumed=true end
                     else
                         local position=data.track.TimePosition or 0
                         local realLength=data.track.Length
@@ -331,93 +371,11 @@ do
                                     local predictedPos=killerRoot.Position+(flatVelocity*ping)
                                     local predictedDistance=(localRoot.Position-predictedPos).Magnitude
                                     if predictedDistance<=STATE.autoParryRadius+2 then
-                                        if doParry(false) then data.consumed=true end
+                                        if doParry(false,killerChar) then data.consumed=true end
                                     end
                                 end
                             end
                         end
-                    end
-                end
-            end
-        end
-    end)
-    RegisterTask("SkillAttackersMonitor",0,function()
-        if not STATE.autoParryEnabled then return end
-        if next(STATE.activeSkillAttackers)==nil then return end
-        for killerChar,data in pairs(STATE.activeSkillAttackers) do
-            if not killerChar or not killerChar.Parent or not data.track then
-                STATE.activeSkillAttackers[killerChar]=nil
-            elseif not data.track.IsPlaying then
-                STATE.activeSkillAttackers[killerChar]=nil
-            elseif not data.consumed then
-                local killerRoot=getCharacterRoot(killerChar)
-                local localRoot=getCharacterRoot(localPlayer.Character)
-                if killerRoot and localRoot then
-                    local distance=(localRoot.Position-killerRoot.Position).Magnitude
-                    if data.skillId==SKILL_ANIM_ID then
-                        if distance<=25 then
-                            if doSkillParry() then data.consumed=true end
-                        end
-                    elseif data.skillId==106871536134254 or data.skillId==109402730355822 then
-                        if distance<=STATE.autoParryRadius then
-                            if doSkillParry() then data.consumed=true end
-                        end
-                    elseif data.skillId==123809268724645 then
-                        if distance<=40 then
-                            if doSkillParry() then data.consumed=true end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-    RunService.Heartbeat:Connect(function()
-        if not STATE.autoParryEnabled then return end
-        local localRoot=getCharacterRoot(localPlayer.Character)
-        if not localRoot then return end
-        for killerChar,data in pairs(STATE.activeAttackers) do
-            if killerChar and killerChar.Parent and data and data.track and data.track.IsPlaying and not data.consumed then
-                local killerRoot=getCharacterRoot(killerChar)
-                if killerRoot then
-                    local distance=(localRoot.Position-killerRoot.Position).Magnitude
-                    if distance<=STATE.autoParryRadius and hasClearAttackPath(localRoot,killerRoot,killerChar) then
-                        if data.fast then
-                            if doParry(true) then data.consumed=true end
-                        else
-                            local velocity=killerRoot.AssemblyLinearVelocity
-                            local localVelocity=localRoot.AssemblyLinearVelocity
-                            local offset=localRoot.Position-killerRoot.Position
-                            local flatOffset=Vector3.new(offset.X,0,offset.Z)
-                            local flatVelocity=Vector3.new(velocity.X-localVelocity.X,0,velocity.Z-localVelocity.Z)
-                            local movingCorrectly=true
-                            if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
-                                movingCorrectly=flatVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
-                            end
-                            local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-                            local predictedKiller=killerRoot.Position+Vector3.new(velocity.X,0,velocity.Z)*ping
-                            local predictedLocal=localRoot.Position+Vector3.new(localVelocity.X,0,localVelocity.Z)*ping
-                            local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
-                            if movingCorrectly and predictedDistance<=STATE.autoParryRadius+2 then
-                                if doParry(true) then data.consumed=true end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        for killerChar,data in pairs(STATE.activeSkillAttackers) do
-            if killerChar and killerChar.Parent and data and data.track and data.track.IsPlaying and not data.consumed then
-                local killerRoot=getCharacterRoot(killerChar)
-                if killerRoot then
-                    local distance=(localRoot.Position-killerRoot.Position).Magnitude
-                    if data.skillId==106871536134254 or data.skillId==109402730355822 then
-                        if distance<=STATE.autoParryRadius and hasClearAttackPath(localRoot,killerRoot,killerChar) then
-                            if doSkillParry() then data.consumed=true end
-                        end
-                    elseif data.skillId==SKILL_ANIM_ID and distance<=25 and hasClearAttackPath(localRoot,killerRoot,killerChar) then
-                        if doSkillParry() then data.consumed=true end
-                    elseif data.skillId==123809268724645 and distance<=40 and hasClearAttackPath(localRoot,killerRoot,killerChar) then
-                        if doSkillParry() then data.consumed=true end
                     end
                 end
             end
@@ -429,7 +387,9 @@ do
     local SEGMENTS=32
     local lastRadius=-1
     local function buildRing()
-        for _,p in ipairs(espRing) do if p and p.Parent then p:Destroy() end end
+        for _,p in ipairs(espRing) do
+            if p and p.Parent then p:Destroy() end
+        end
         espRing={}
         espCache={}
         local step=(2*math.pi)/SEGMENTS
@@ -455,11 +415,15 @@ do
     local function updateSegmentSizes(radius)
         local arcLen=(2*math.pi*radius)/SEGMENTS
         for _,seg in ipairs(espRing) do
-            if seg and seg.Parent then seg.Size=Vector3.new(0.08,0.08,arcLen+0.02) end
+            if seg and seg.Parent then
+                seg.Size=Vector3.new(0.08,0.08,arcLen+0.02)
+            end
         end
     end
     local function destroyRing()
-        for _,p in ipairs(espRing) do if p and p.Parent then p:Destroy() end end
+        for _,p in ipairs(espRing) do
+            if p and p.Parent then p:Destroy() end
+        end
         espRing={}
         espCache={}
         lastRadius=-1
@@ -469,10 +433,13 @@ do
             buildRing()
             espLoop=RunService.RenderStepped:Connect(function()
                 if not localPlayer.Character then return end
-                local root=getCharacterRoot(localPlayer.Character)
+                local root=localPlayer.Character:FindFirstChild("HumanoidRootPart")
                 if not root then return end
                 local radius=STATE.autoParryRadius
-                if radius~=lastRadius then updateSegmentSizes(radius);lastRadius=radius end
+                if radius~=lastRadius then
+                    updateSegmentSizes(radius)
+                    lastRadius=radius
+                end
                 local center=root.Position-Vector3.new(0,root.Size.Y/2+0.6,0)
                 for i,seg in ipairs(espRing) do
                     if seg and seg.Parent then
@@ -488,6 +455,46 @@ do
             destroyRing()
         end
     end
+    RunService.Heartbeat:Connect(function()
+        if not STATE.autoParryEnabled then return end
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot then return end
+        local localPos=localRoot.Position
+        local localVel=localRoot.AssemblyLinearVelocity
+        local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+        for killerChar,data in pairs(STATE.activeSkillAttackers) do
+            if not killerChar or not killerChar.Parent or not data or not data.track then
+                STATE.activeSkillAttackers[killerChar]=nil
+            elseif not data.track.IsPlaying then
+                STATE.activeSkillAttackers[killerChar]=nil
+            elseif not data.consumed and data.skillId==SKILL_ANIM_ID then
+                if not isIgnoredSkillKiller(data.name) then
+                    local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+                    if killerRoot then
+                        local killerPos=killerRoot.Position
+                        local killerVel=killerRoot.AssemblyLinearVelocity
+                        local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
+                        local distance=flatOffset.Magnitude
+                        if distance<=HIDDEN_RANGE then
+                            if doSkillParry(killerChar) then
+                                data.consumed=true
+                            end
+                        else
+                            local predictedKiller=killerPos+Vector3.new(killerVel.X,0,killerVel.Z)*math.min(ping+HIDDEN_PREDICT_TIME,0.3)
+                            local predictedLocal=localPos+Vector3.new(localVel.X,0,localVel.Z)*math.min(ping+HIDDEN_PREDICT_TIME,0.3)
+                            local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
+                            if predictedDistance<=HIDDEN_RANGE then
+                                if doSkillParry(killerChar) then
+                                    data.consumed=true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
 end
 RunService.Heartbeat:Connect(function(dt)
     for i=1,#MasterTasks do
