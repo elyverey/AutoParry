@@ -23,11 +23,11 @@ do
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
     local HIDDEN_RANGE=15
     local HIDDEN_PREDICT_TIME=0.12
+    local VAULT_EXTRA_RANGE=2.25
     local CLOSE_RANGE=4.5
     local HARD_CLOSE_RANGE=2.75
     local MIN_CLOSING_SPEED=2
     local EMERGENCY_TIME=0.18
-    local VAULT_EXTRA_RANGE=2.25
     local ATTACK_PROFILES={
         [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
         [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
@@ -84,7 +84,9 @@ do
                 return obj
             end)
             if ok and fakeInput then
-                for _,conn in getconnections(UserInputService.InputBegan) do conn:Fire(fakeInput,false) end
+                for _,conn in getconnections(UserInputService.InputBegan) do
+                    conn:Fire(fakeInput,false)
+                end
             else
                 VirtualInputManager:SendMouseButtonEvent(0,0,1,true,game,0)
             end
@@ -92,7 +94,9 @@ do
         local root=char:FindFirstChild("HumanoidRootPart")
         if root then
             pcall(function()
-                if CollectionService:HasTag(root,"doing action") then CollectionService:RemoveTag(root,"doing action") end
+                if CollectionService:HasTag(root,"doing action") then
+                    CollectionService:RemoveTag(root,"doing action")
+                end
             end)
         end
     end
@@ -113,9 +117,9 @@ do
         local name=tostring(instance.Name):lower()
         local parent=instance.Parent
         if parent then
-            local pn=tostring(parent.Name):lower()
-            if pn:find("vault") or pn:find("window") or pn:find("pallet") then
-                name=name.." "..pn
+            local parentName=tostring(parent.Name):lower()
+            if parentName:find("vault") or parentName:find("window") or parentName:find("pallet") then
+                name=name.." "..parentName
             end
         end
         return name
@@ -124,17 +128,10 @@ do
         local name=getObstacleName(instance)
         return name:find("vault")~=nil or name:find("window")~=nil
     end
-    local function isHardObstacle(instance)
-        local name=getObstacleName(instance)
-        if name:find("wall") or name:find("pallet") or name:find("door") or name:find("barrier") or name:find("block") then
-            return true
-        end
-        return not isVaultObstacle(instance)
-    end
     local rayParams=RaycastParams.new()
     rayParams.FilterType=Enum.RaycastFilterType.Exclude
     rayParams.IgnoreWater=true
-    local function checkAttackPath(killerChar,allowVault)
+    local function checkAttackPath(killerChar,allowVault,distance)
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
@@ -144,45 +141,53 @@ do
         local b=killerRoot.Position
         local delta=b-a
         if delta.Magnitude<=0.05 then return true end
-        local offsets={Vector3.new(0,0,0),Vector3.new(0,1.15,0),Vector3.new(0,-1.0,0)}
-        local vaultBlocked=false
+        local offsets={Vector3.new(0,0,0),Vector3.new(0,1.1,0),Vector3.new(0,-0.75,0)}
+        local vaultHit=false
+        local hardBlocked=true
         for i=1,#offsets do
             local origin=a+offsets[i]
             local target=b+offsets[i]
             local result=Workspace:Raycast(origin,target-origin,rayParams)
-            if not result then return true end
+            if not result then
+                return true
+            end
             if isVaultObstacle(result.Instance) then
-                vaultBlocked=true
-            elseif isHardObstacle(result.Instance) then
-                return false
+                vaultHit=true
+            else
+                hardBlocked=true
             end
         end
-        if allowVault and vaultBlocked then
-            local distance=delta.Magnitude
-            if distance<=HIDDEN_RANGE+VAULT_EXTRA_RANGE then return true end
+        if allowVault and vaultHit and distance<=HIDDEN_RANGE+VAULT_EXTRA_RANGE then
+            return true
         end
         return false
     end
-    local function canParryAgainst(killerChar,distance,allowVault)
+    local function canParryAgainst(killerChar,distance,range,allowVault)
         if not killerChar or not killerChar.Parent then return false end
-        if distance<=2.25 then
-            return checkAttackPath(killerChar,allowVault)
-        end
-        if distance>STATE.autoParryRadius+(allowVault and VAULT_EXTRA_RANGE or 0) then return false end
-        return checkAttackPath(killerChar,allowVault)
+        if not distance or distance==math.huge then return false end
+        if distance>range+(allowVault and VAULT_EXTRA_RANGE or 0) then return false end
+        return checkAttackPath(killerChar,allowVault,distance)
     end
-    local function doParry(force,killerChar)
+    local function doParry(force,killerChar,distance)
         if not STATE.autoParryEnabled then return false end
-        if killerChar and not canParryAgainst(killerChar,math.huge,false) then return false end
+        if killerChar and distance then
+            if not canParryAgainst(killerChar,distance,STATE.autoParryRadius,false) then
+                return false
+            end
+        end
         local now=tick()
         if now-STATE.lastParryTime<0.01 then return false end
         STATE.lastParryTime=now
         sendParryInput()
         return true
     end
-    local function doSkillParry(killerChar)
+    local function doSkillParry(killerChar,distance)
         if not STATE.autoParryEnabled then return false end
-        if killerChar and not canParryAgainst(killerChar,HIDDEN_RANGE,true) then return false end
+        if killerChar and distance then
+            if not canParryAgainst(killerChar,distance,HIDDEN_RANGE,true) then
+                return false
+            end
+        end
         local now=tick()
         if now-STATE.lastParryTime<0.01 then return false end
         STATE.lastParryTime=now
@@ -210,8 +215,10 @@ do
             end)
         end)
         local distance=getSkillDistance(char)
-        if distance<=HIDDEN_RANGE and not data.consumed then
-            if doSkillParry(char) then data.consumed=true end
+        if distance<=HIDDEN_RANGE then
+            if doSkillParry(char,distance) then
+                data.consumed=true
+            end
         end
     end
     local function OnParryCharacterAdded(player,char)
@@ -263,14 +270,20 @@ do
     local function OnParryPlayerAdded(player)
         if player==localPlayer then return end
         if player.Character then
-            task.spawn(function() OnParryCharacterAdded(player,player.Character) end)
+            task.spawn(function()
+                OnParryCharacterAdded(player,player.Character)
+            end)
         end
         player.CharacterAdded:Connect(function(char)
-            task.spawn(function() OnParryCharacterAdded(player,char) end)
+            task.spawn(function()
+                OnParryCharacterAdded(player,char)
+            end)
         end)
     end
     for _,player in ipairs(Players:GetPlayers()) do
-        if player~=localPlayer then OnParryPlayerAdded(player) end
+        if player~=localPlayer then
+            OnParryPlayerAdded(player)
+        end
     end
     Players.PlayerAdded:Connect(OnParryPlayerAdded)
     RegisterTask("CloseRangeMonitor",0,function()
@@ -292,7 +305,9 @@ do
                     local localVelocity=localRoot.AssemblyLinearVelocity
                     local relativeVelocity=Vector3.new(killerVelocity.X-localVelocity.X,0,killerVelocity.Z-localVelocity.Z)
                     local closingSpeed=0
-                    if distance>0 then closingSpeed=relativeVelocity:Dot(flatOffset.Unit) end
+                    if distance>0 then
+                        closingSpeed=relativeVelocity:Dot(flatOffset.Unit)
+                    end
                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
                     local predictedKiller=killerRoot.Position+Vector3.new(killerVelocity.X,0,killerVelocity.Z)*ping
                     local predictedLocal=localPos+Vector3.new(localVelocity.X,0,localVelocity.Z)*ping
@@ -302,12 +317,16 @@ do
                         shouldEmergency=true
                     elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
                         local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=EMERGENCY_TIME or predictedDistance<=3.75 then shouldEmergency=true end
+                        if timeToImpact<=EMERGENCY_TIME or predictedDistance<=3.75 then
+                            shouldEmergency=true
+                        end
                     end
                     if shouldEmergency then
                         local data=STATE.activeAttackers[killerChar]
                         if data and not data.consumed then
-                            if doParry(true,killerChar) then data.consumed=true end
+                            if doParry(true,killerChar,distance) then
+                                data.consumed=true
+                            end
                         end
                     end
                 end
@@ -346,10 +365,14 @@ do
                         emergency=true
                     elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
                         local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=EMERGENCY_TIME then emergency=true end
+                        if timeToImpact<=EMERGENCY_TIME then
+                            emergency=true
+                        end
                     end
                     if emergency then
-                        if doParry(true,killerChar) then data.consumed=true end
+                        if doParry(true,killerChar,distance) then
+                            data.consumed=true
+                        end
                     else
                         local position=data.track.TimePosition or 0
                         local realLength=data.track.Length
@@ -371,7 +394,9 @@ do
                                     local predictedPos=killerRoot.Position+(flatVelocity*ping)
                                     local predictedDistance=(localRoot.Position-predictedPos).Magnitude
                                     if predictedDistance<=STATE.autoParryRadius+2 then
-                                        if doParry(false,killerChar) then data.consumed=true end
+                          if doParry(false,killerChar,distance) then
+                                            data.consumed=true
+                                        end
                                     end
                                 end
                             end
@@ -451,18 +476,23 @@ do
                 end
             end)
         else
-            if espLoop then espLoop:Disconnect();espLoop=nil end
+            if espLoop then
+                espLoop:Disconnect()
+                espLoop=nil
+            end
             destroyRing()
         end
     end
     RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then return end
+        if next(STATE.activeSkillAttackers)==nil then return end
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         if not localRoot then return end
         local localPos=localRoot.Position
         local localVel=localRoot.AssemblyLinearVelocity
         local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+        local predictionTime=math.min(ping+HIDDEN_PREDICT_TIME,0.3)
         for killerChar,data in pairs(STATE.activeSkillAttackers) do
             if not killerChar or not killerChar.Parent or not data or not data.track then
                 STATE.activeSkillAttackers[killerChar]=nil
@@ -477,15 +507,15 @@ do
                         local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
                         local distance=flatOffset.Magnitude
                         if distance<=HIDDEN_RANGE then
-                            if doSkillParry(killerChar) then
+                            if doSkillParry(killerChar,distance) then
                                 data.consumed=true
                             end
                         else
-                            local predictedKiller=killerPos+Vector3.new(killerVel.X,0,killerVel.Z)*math.min(ping+HIDDEN_PREDICT_TIME,0.3)
-                            local predictedLocal=localPos+Vector3.new(localVel.X,0,localVel.Z)*math.min(ping+HIDDEN_PREDICT_TIME,0.3)
+                            local predictedKiller=killerPos+Vector3.new(killerVel.X,0,killerVel.Z)*predictionTime
+                            local predictedLocal=localPos+Vector3.new(localVel.X,0,localVel.Z)*predictionTime
                             local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
                             if predictedDistance<=HIDDEN_RANGE then
-                                if doSkillParry(killerChar) then
+                                if doSkillParry(killerChar,predictedDistance) then
                                     data.consumed=true
                                 end
                             end
