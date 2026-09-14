@@ -21,9 +21,12 @@ local toggleAutoParryESP
 do
     local SKILL_ANIM_ID=98163597193511
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
-    local HIDDEN_RANGE=15
+    local HIDDEN_RANGE=21
     local HIDDEN_PREDICT_TIME=0.12
     local VAULT_EXTRA_RANGE=2.25
+    local LUNGE_EARLY_TIME=0.32
+    local LUNGE_CRITICAL_TIME=0.16
+    local LUNGE_MIN_SPEED=8
     local CLOSE_RANGE=4.5
     local HARD_CLOSE_RANGE=2.75
     local MIN_CLOSING_SPEED=2
@@ -128,6 +131,13 @@ do
         local name=getObstacleName(instance)
         return name:find("vault")~=nil or name:find("window")~=nil
     end
+    local function isHardObstacle(instance)
+        local name=getObstacleName(instance)
+        if name:find("wall") or name:find("pallet") or name:find("door") or name:find("barrier") or name:find("block") then
+            return true
+        end
+        return not isVaultObstacle(instance)
+    end
     local rayParams=RaycastParams.new()
     rayParams.FilterType=Enum.RaycastFilterType.Exclude
     rayParams.IgnoreWater=true
@@ -142,22 +152,31 @@ do
         local delta=b-a
         if delta.Magnitude<=0.05 then return true end
         local offsets={Vector3.new(0,0,0),Vector3.new(0,1.1,0),Vector3.new(0,-0.75,0)}
+        local clear=false
         local vaultHit=false
-        local hardBlocked=true
+        local hardHit=false
         for i=1,#offsets do
             local origin=a+offsets[i]
             local target=b+offsets[i]
             local result=Workspace:Raycast(origin,target-origin,rayParams)
             if not result then
-                return true
+                clear=true
+                break
             end
             if isVaultObstacle(result.Instance) then
                 vaultHit=true
-            else
-                hardBlocked=true
+            elseif isHardObstacle(result.Instance) then
+                hardHit=true
             end
         end
-        if allowVault and vaultHit and distance<=HIDDEN_RANGE+VAULT_EXTRA_RANGE then
+        if clear then return true end
+        if hardHit then
+            if allowVault and vaultHit and distance and distance<=HIDDEN_RANGE+VAULT_EXTRA_RANGE then
+                return true
+            end
+            return false
+        end
+        if vaultHit and allowVault and distance and distance<=HIDDEN_RANGE+VAULT_EXTRA_RANGE then
             return true
         end
         return false
@@ -168,10 +187,10 @@ do
         if distance>range+(allowVault and VAULT_EXTRA_RANGE or 0) then return false end
         return checkAttackPath(killerChar,allowVault,distance)
     end
-    local function doParry(force,killerChar,distance)
+    local function doParry(force,killerChar,distance,allowVault)
         if not STATE.autoParryEnabled then return false end
         if killerChar and distance then
-            if not canParryAgainst(killerChar,distance,STATE.autoParryRadius,false) then
+            if not canParryAgainst(killerChar,distance,STATE.autoParryRadius,allowVault==true) then
                 return false
             end
         end
@@ -215,7 +234,7 @@ do
             end)
         end)
         local distance=getSkillDistance(char)
-        if distance<=HIDDEN_RANGE then
+        if distance<=HIDDEN_RANGE and not data.consumed then
             if doSkillParry(char,distance) then
                 data.consumed=true
             end
@@ -324,7 +343,7 @@ do
                     if shouldEmergency then
                         local data=STATE.activeAttackers[killerChar]
                         if data and not data.consumed then
-                            if doParry(true,killerChar,distance) then
+                            if doParry(true,killerChar,distance,data.type=="lungehold") then
                                 data.consumed=true
                             end
                         end
@@ -340,6 +359,7 @@ do
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         if not localRoot then return end
         local localPos=localRoot.Position
+        local localVel=localRoot.AssemblyLinearVelocity
         for killerChar,data in pairs(STATE.activeAttackers) do
             if not killerChar or not killerChar.Parent or not data.track then
                 STATE.activeAttackers[killerChar]=nil
@@ -349,57 +369,65 @@ do
                 local profile=data.profile
                 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                 if killerRoot and profile then
-                    local offset=localPos-killerRoot.Position
+                    local killerPos=killerRoot.Position
+                    local killerVelocity=killerRoot.AssemblyLinearVelocity
+                    local offset=localPos-killerPos
                     local distance=offset.Magnitude
-                    local velocity=killerRoot.AssemblyLinearVelocity
-                    local localVelocity=localRoot.AssemblyLinearVelocity
-                    local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
-                    local flatLocalVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
                     local flatOffset=Vector3.new(offset.X,0,offset.Z)
+                    local flatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
+                    local flatLocalVelocity=Vector3.new(localVel.X,0,localVel.Z)
                     local closingSpeed=0
                     if flatOffset.Magnitude>0 then
                         closingSpeed=Vector3.new(flatVelocity.X-flatLocalVelocity.X,0,flatVelocity.Z-flatLocalVelocity.Z):Dot(flatOffset.Unit)
                     end
-                    local emergency=false
-                    if distance<=HARD_CLOSE_RANGE then
-                        emergency=true
-                    elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
-                        local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=EMERGENCY_TIME then
-                            emergency=true
-                        end
+                    local timeToImpact=math.huge
+                    if closingSpeed>0 then
+                        timeToImpact=distance/closingSpeed
                     end
-                    if emergency then
-                        if doParry(true,killerChar,distance) then
-                            data.consumed=true
+                    local position=data.track.TimePosition or 0
+                    local realLength=data.track.Length
+                    local length=(realLength and realLength>0) and realLength or profile.length
+                    local speed=profile.speed
+                    local normalizedTime=position*speed
+                    local normalizedLength=length/speed
+                    local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
+                    local triggerTime=profile.triggerTime/profile.speed
+                    local triggerProgress=profile.triggerProgress
+                    local animationReady=position>=triggerTime or progress>=triggerProgress
+                    local lungeReady=false
+                    local lungeCritical=false
+                    if data.type=="lungehold" then
+                        lungeReady=closingSpeed>=LUNGE_MIN_SPEED and timeToImpact<=LUNGE_EARLY_TIME
+                        lungeCritical=closingSpeed>=4 and timeToImpact<=LUNGE_CRITICAL_TIME
+                    end
+                    local shouldParry=false
+                    if data.type=="lungehold" then
+                        if distance<=HARD_CLOSE_RANGE then
+                            shouldParry=true
+                        elseif distance<=STATE.autoParryRadius+5 and (animationReady or lungeReady or lungeCritical) then
+                            shouldParry=true
                         end
                     else
-                        local position=data.track.TimePosition or 0
-                        local realLength=data.track.Length
-                        local length=(realLength and realLength>0) and realLength or profile.length
-                        local speed=profile.speed
-                        local normalizedTime=position*speed
-                        local normalizedLength=length/speed
-                        local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
-                        local triggerTime=profile.triggerTime/profile.speed
-                        local triggerProgress=profile.triggerProgress
-                        if position>=triggerTime or progress>=triggerProgress then
-                            if distance<=STATE.autoParryRadius then
-                                local movingCorrectly=true
-                                if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
-                                    movingCorrectly=flatVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
-                                end
-                                if movingCorrectly then
-                                    local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-                                    local predictedPos=killerRoot.Position+(flatVelocity*ping)
-                                    local predictedDistance=(localRoot.Position-predictedPos).Magnitude
-                                    if predictedDistance<=STATE.autoParryRadius+2 then
-                          if doParry(false,killerChar,distance) then
-                                            data.consumed=true
-                                        end
-                                    end
+                        if distance<=HARD_CLOSE_RANGE then
+                            shouldParry=true
+                        elseif animationReady and distance<=STATE.autoParryRadius then
+                            local movingCorrectly=true
+                            if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
+                                movingCorrectly=flatVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
+                            end
+                            if movingCorrectly then
+                                local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+                                local predictedPos=killerRoot.Position+(flatVelocity*ping)
+                                local predictedDistance=(localRoot.Position-predictedPos).Magnitude
+                                if predictedDistance<=STATE.autoParryRadius+2 then
+                                    shouldParry=true
                                 end
                             end
+                        end
+                    end
+                    if shouldParry then
+                        if doParry(false,killerChar,distance,data.type=="lungehold") then
+                            data.consumed=true
                         end
                     end
                 end
