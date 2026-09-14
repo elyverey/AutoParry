@@ -12,7 +12,7 @@ local ACCENT_COLOR=Color3.fromRGB(255,255,255)
 local function Notify(title,content,delay)
     Chloex:MakeNotify({Title=title or "BOLONG-HUB",Description="Info",Content=content or "",Color=ACCENT_COLOR,Time=0.4,Delay=delay or 2})
 end
-local STATE={autoParryEnabled=false,autoParryRadiusEsp=false,autoParryRadius=10,aimStrictness=0.1,ignoredTheHidden=false,ignoredTheAbysswalker=false,ignoredTheMaskedDuck=false,lastParryTime=0,activeAttackers={},activeSkillAttackers={},killerCharacters={}}
+local STATE={autoParryEnabled=false,autoParryRadiusEsp=false,autoParryRadius=10,aimStrictness=0.1,ignoredTheHidden=false,ignoredTheAbysswalker=false,ignoredTheMaskedDuck=false,lastParryTime=0,lastSkillParryTime=0,activeAttackers={},activeSkillAttackers={},activeMaskedSkillAttackers={},killerCharacters={}}
 local MasterTasks={}
 local function RegisterTask(name,interval,fn)
     MasterTasks[#MasterTasks+1]={name=name,interval=interval,timer=0,fn=fn}
@@ -21,15 +21,14 @@ local toggleAutoParryESP
 do
     local SKILL_ANIM_ID=98163597193511
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
-    local HIDDEN_RANGE=26
-    local HIDDEN_PREDICT_TIME=0.12
-    local VAULT_EXTRA_RANGE=2.25
-    local LUNGE_EARLY_TIME=0.38
-    local LUNGE_CRITICAL_TIME=0.16
-    local LUNGE_MIN_SPEED=7
-    local LUNGE_TRAJECTORY_TIME=0.55
-    local LUNGE_TRAJECTORY_STEPS=9
-    local LUNGE_TRAJECTORY_REACH=4.5
+    local HIDDEN_RANGE=30
+    local HIDDEN_SPEED=13.8
+    local HIDDEN_PREDICT_TIME=0.05
+    local MASKED_EXTRA_ANIMS={
+        ["rbxassetid://117070354890871"]={type="lungehold",length=2.00,speed=1.00},
+        ["rbxassetid://106871536134254"]={type="attack",length=3.00,speed=1.00},
+        ["rbxassetid://109402730355822"]={type="attack",length=2.95,speed=1.00}
+    }
     local CLOSE_RANGE=4.5
     local HARD_CLOSE_RANGE=2.75
     local MIN_CLOSING_SPEED=2
@@ -106,6 +105,22 @@ do
             end)
         end
     end
+    local function doParry(force)
+        if not STATE.autoParryEnabled then return false end
+        local now=tick()
+        if now-STATE.lastParryTime<0.01 then return false end
+        STATE.lastParryTime=now
+        sendParryInput()
+        return true
+    end
+    local function doFastSkillParry()
+        if not STATE.autoParryEnabled then return false end
+        local now=tick()
+        if now-STATE.lastSkillParryTime<0.003 then return false end
+        STATE.lastSkillParryTime=now
+        sendParryInput()
+        return true
+    end
     local function isIgnoredSkillKiller(killerName)
         if typeof(killerName)~="string" then return false end
         local name=killerName:lower()
@@ -118,163 +133,10 @@ do
         end
         return false
     end
-    local function getObstacleName(instance)
-        if not instance then return "" end
-        return tostring(instance.Name):lower()
-    end
-    local function isVaultObstacle(instance)
-        local name=getObstacleName(instance)
-        local parent=instance and instance.Parent
-        if parent then
-            name=name.." "..tostring(parent.Name):lower()
-        end
-        return name:find("vault")~=nil or name:find("window")~=nil
-    end
-    local function isHardObstacle(instance)
-        if not instance then return false end
-        return not isVaultObstacle(instance)
-    end
-    local function makeRayParams(localChar,killerChar)
-        local params=RaycastParams.new()
-        params.FilterType=Enum.RaycastFilterType.Exclude
-        params.IgnoreWater=true
-        params.FilterDescendantsInstances={localChar,killerChar}
-        return params
-    end
-    local function multiHeightRay(origin,target,params)
-        local delta=target-origin
-        if delta.Magnitude<=0.05 then return true,nil end
-        local offsets={
-            Vector3.new(0,0,0),
-            Vector3.new(0,0.9,0),
-            Vector3.new(0,1.6,0),
-            Vector3.new(0,-0.65,0),
-            Vector3.new(0,-1.15,0)
-        }
-        local lastHit=nil
-        for _,offset in ipairs(offsets) do
-            local result=Workspace:Raycast(origin+offset,delta,params)
-            if not result then
-                return true,nil
-            end
-            lastHit=result
-        end
-        return false,lastHit
-    end
-    local function checkAttackPath(killerChar,allowVault,distance)
-        local localChar=localPlayer.Character
-        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
-        if not localRoot or not killerRoot then return false end
-        local params=makeRayParams(localChar,killerChar)
-        local clear,hit=multiHeightRay(localRoot.Position,killerRoot.Position,params)
-        if clear then return true end
-        if allowVault and hit and isVaultObstacle(hit.Instance) and distance and distance<=STATE.autoParryRadius+VAULT_EXTRA_RANGE then
-            return true
-        end
-        return false
-    end
-    local function getFlatVelocity(root)
-        local v=root.AssemblyLinearVelocity
-        return Vector3.new(v.X,0,v.Z)
-    end
-    local function getClosingSpeed(localRoot,killerRoot)
-        local offset=localRoot.Position-killerRoot.Position
-        local flatOffset=Vector3.new(offset.X,0,offset.Z)
-        if flatOffset.Magnitude<=0.05 then return math.huge end
-        local relative=getFlatVelocity(killerRoot)-getFlatVelocity(localRoot)
-        return relative:Dot(flatOffset.Unit)
-    end
-    local function checkLungeTrajectory(killerChar,distance,closingSpeed)
-        if not killerChar or not killerChar.Parent then return false end
-        if not distance or distance==math.huge then return false end
-        if distance>STATE.autoParryRadius+LUNGE_TRAJECTORY_REACH then return false end
-        if closingSpeed<LUNGE_MIN_SPEED and distance>HARD_CLOSE_RANGE then return false end
-        local localChar=localPlayer.Character
-        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-        local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
-        if not localRoot or not killerRoot then return false end
-        local params=makeRayParams(localChar,killerChar)
-        local localPos=localRoot.Position
-        local killerPos=killerRoot.Position
-        local localVel=getFlatVelocity(localRoot)
-        local killerVel=getFlatVelocity(killerRoot)
-        local relativeVel=killerVel-localVel
-        local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
-        local baseDistance=flatOffset.Magnitude
-        if baseDistance<=HARD_CLOSE_RANGE then return true end
-        local horizon=LUNGE_TRAJECTORY_TIME
-        local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-        horizon=math.max(horizon,ping+0.12)
-        for i=1,LUNGE_TRAJECTORY_STEPS do
-            local t=(i/LUNGE_TRAJECTORY_STEPS)*horizon
-            local predictedKiller=killerPos+killerVel*t
-            local predictedLocal=localPos+localVel*t
-            local predictedOffset=Vector3.new(predictedLocal.X-predictedKiller.X,0,predictedLocal.Z-predictedKiller.Z)
-            local predictedDistance=predictedOffset.Magnitude
-            if predictedDistance<=STATE.autoParryRadius+LUNGE_TRAJECTORY_REACH then
-                local clear=multiHeightRay(predictedKiller,predictedLocal,params)
-                if clear then
-                    local approach=relativeVel
-                    local speed=predictedDistance>0 and approach:Dot(predictedOffset.Unit) or math.huge
-                    if speed>=2 or predictedDistance<=HARD_CLOSE_RANGE then
-                        return true
-                    end
-                end
-            end
-        end
-        local direction=flatOffset.Magnitude>0 and flatOffset.Unit or Vector3.zero
-        local side=Vector3.new(-direction.Z,0,direction.X)
-        local lateralOffsets={-3,-1.5,1.5,3}
-        for _,sideAmount in ipairs(lateralOffsets) do
-            local lateral=side*sideAmount
-            local predictedKiller=killerPos+killerVel*math.min(horizon,0.3)+lateral
-            local predictedLocal=localPos+localVel*math.min(horizon,0.3)
-            local predictedOffset=Vector3.new(predictedLocal.X-predictedKiller.X,0,predictedLocal.Z-predictedKiller.Z)
-            if predictedOffset.Magnitude<=STATE.autoParryRadius+LUNGE_TRAJECTORY_REACH then
-                local clear=multiHeightRay(predictedKiller,predictedLocal,params)
-                if clear then
-                    return true
-                end
-            end
-        end
-        return false
-    end
-    local function canParryAgainst(killerChar,distance,range,allowVault,isLunge,closingSpeed)
-        if not killerChar or not killerChar.Parent then return false end
-        if not distance or distance==math.huge then return false end
-        if distance>range+(allowVault and VAULT_EXTRA_RANGE or 0) then return false end
-        if checkAttackPath(killerChar,allowVault,distance) then return true end
-        if isLunge then
-            return checkLungeTrajectory(killerChar,distance,closingSpeed or 0)
-        end
-        return false
-    end
-    local function doParry(force,killerChar,distance,allowVault,isLunge,closingSpeed)
-        if not STATE.autoParryEnabled then return false end
-        if killerChar and distance then
-            if not canParryAgainst(killerChar,distance,STATE.autoParryRadius,allowVault==true,isLunge==true,closingSpeed) then
-                return false
-            end
-        end
-        local now=tick()
-        if now-STATE.lastParryTime<0.01 then return false end
-        STATE.lastParryTime=now
-        sendParryInput()
-        return true
-    end
-    local function doSkillParry(killerChar,distance)
-        if not STATE.autoParryEnabled then return false end
-        if killerChar and distance then
-            if not canParryAgainst(killerChar,distance,HIDDEN_RANGE,true,false,nil) then
-                return false
-            end
-        end
-        local now=tick()
-        if now-STATE.lastParryTime<0.01 then return false end
-        STATE.lastParryTime=now
-        sendParryInput()
-        return true
+    local function isMaskedKiller(killerName)
+        if typeof(killerName)~="string" then return false end
+        local name=killerName:lower()
+        return name=="the masked (duck)" or name=="the masked"
     end
     local function getSkillDistance(char)
         local localChar=localPlayer.Character
@@ -282,6 +144,18 @@ do
         local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
         if not localRoot or not killerRoot then return math.huge end
         return (localRoot.Position-killerRoot.Position).Magnitude
+    end
+    local function tryHiddenParry(char,data)
+        if data.consumed or not STATE.autoParryEnabled then return false end
+        if isIgnoredSkillKiller(data.name) then return false end
+        local distance=getSkillDistance(char)
+        if distance<=HIDDEN_RANGE then
+            if doFastSkillParry() then
+                data.consumed=true
+                return true
+            end
+        end
+        return false
     end
     local function registerSkillAttack(char,kName,track)
         if isIgnoredSkillKiller(kName) then return end
@@ -296,9 +170,25 @@ do
                 end
             end)
         end)
+        tryHiddenParry(char,data)
+    end
+    local function registerMaskedFastAttack(char,kName,track,profile,animId)
+        if not isMaskedKiller(kName) then return end
+        if STATE.ignoredTheMaskedDuck then return end
+        local data={name=kName,track=track,type="maskedfast",started=tick(),consumed=false,id=animId,profile=profile}
+        STATE.activeMaskedSkillAttackers[char]=data
+        local conn
+        conn=track.Stopped:Connect(function()
+            if conn then conn:Disconnect() end
+            task.defer(function()
+                if STATE.activeMaskedSkillAttackers[char] and STATE.activeMaskedSkillAttackers[char].track==track then
+                    STATE.activeMaskedSkillAttackers[char]=nil
+                end
+            end)
+        end)
         local distance=getSkillDistance(char)
-        if distance<=HIDDEN_RANGE and not data.consumed then
-            if doSkillParry(char,distance) then
+        if distance<=STATE.autoParryRadius then
+            if doFastSkillParry() then
                 data.consumed=true
             end
         end
@@ -316,6 +206,7 @@ do
                     STATE.killerCharacters[char]=nil
                     STATE.activeAttackers[char]=nil
                     STATE.activeSkillAttackers[char]=nil
+                    STATE.activeMaskedSkillAttackers[char]=nil
                 end
             end)
             local humanoid=char:WaitForChild("Humanoid",3)
@@ -328,6 +219,11 @@ do
                         local animId=track.Animation.AnimationId
                         if animId==INSTANT_ANIM_ID then
                             registerSkillAttack(char,kName,track)
+                            return
+                        end
+                        local maskedProfile=MASKED_EXTRA_ANIMS[animId]
+                        if maskedProfile and isMaskedKiller(kName) then
+                            registerMaskedFastAttack(char,kName,track,maskedProfile,tonumber(animId:match("%d+")))
                             return
                         end
                         local profile=VALID_ANIM_IDS[animId]
@@ -373,39 +269,35 @@ do
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         if not localRoot then return end
-        local localPos=localRoot.Position
-        for killerChar in pairs(STATE.killerCharacters) do
+        for killerChar,killerData in pairs(STATE.killerCharacters) do
             if not killerChar or not killerChar.Parent then
                 STATE.killerCharacters[killerChar]=nil
             else
                 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                 if killerRoot then
-                    local offset=localPos-killerRoot.Position
+                    local offset=localRoot.Position-killerRoot.Position
                     local flatOffset=Vector3.new(offset.X,0,offset.Z)
                     local distance=flatOffset.Magnitude
-                    local closingSpeed=getClosingSpeed(localRoot,killerRoot)
+                    local killerVelocity=killerRoot.AssemblyLinearVelocity
+                    local localVelocity=localRoot.AssemblyLinearVelocity
+                    local relativeVelocity=Vector3.new(killerVelocity.X-localVelocity.X,0,killerVelocity.Z-localVelocity.Z)
+                    local closingSpeed=0
+                    if distance>0 then closingSpeed=relativeVelocity:Dot(flatOffset.Unit) end
                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-                    local killerVelocity=getFlatVelocity(killerRoot)
-                    local localVelocity=getFlatVelocity(localRoot)
-                    local predictedKiller=killerRoot.Position+killerVelocity*ping
-                    local predictedLocal=localPos+localVelocity*ping
+                    local predictedKiller=killerRoot.Position+Vector3.new(killerVelocity.X,0,killerVelocity.Z)*ping
+                    local predictedLocal=localRoot.Position+Vector3.new(localVelocity.X,0,localVelocity.Z)*ping
                     local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
                     local shouldEmergency=false
-                    if distance<=HARD_CLOSE_RANGE then
+                    if distance<=2.75 then
                         shouldEmergency=true
-                    elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
+                    elseif distance<=4.5 and closingSpeed>=2 then
                         local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=EMERGENCY_TIME or predictedDistance<=3.75 then
-                            shouldEmergency=true
-                        end
+                        if timeToImpact<=0.18 or predictedDistance<=3.75 then shouldEmergency=true end
                     end
                     if shouldEmergency then
                         local data=STATE.activeAttackers[killerChar]
                         if data and not data.consumed then
-                            local isLunge=data.type=="lungehold"
-                            if doParry(true,killerChar,distance,isLunge,isLunge,closingSpeed) then
-                                data.consumed=true
-                            end
+                            if doParry(true) then data.consumed=true end
                         end
                     end
                 end
@@ -415,11 +307,6 @@ do
     RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
-        local localChar=localPlayer.Character
-        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-        if not localRoot then return end
-        local localPos=localRoot.Position
-        local localVel=getFlatVelocity(localRoot)
         for killerChar,data in pairs(STATE.activeAttackers) do
             if not killerChar or not killerChar.Parent or not data.track then
                 STATE.activeAttackers[killerChar]=nil
@@ -428,72 +315,126 @@ do
             elseif not data.consumed then
                 local profile=data.profile
                 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
-                if killerRoot and profile then
-                    local killerPos=killerRoot.Position
-                    local killerVelocity=getFlatVelocity(killerRoot)
-                    local offset=localPos-killerPos
+                local localChar=localPlayer.Character
+                local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+                if killerRoot and localRoot and profile then
+                    local offset=localRoot.Position-killerRoot.Position
                     local distance=offset.Magnitude
+                    local velocity=killerRoot.AssemblyLinearVelocity
+                    local localVelocity=localRoot.AssemblyLinearVelocity
+                    local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
+                    local flatLocalVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
                     local flatOffset=Vector3.new(offset.X,0,offset.Z)
-                    local flatLocalVelocity=localVel
                     local closingSpeed=0
                     if flatOffset.Magnitude>0 then
-                        closingSpeed=(killerVelocity-flatLocalVelocity):Dot(flatOffset.Unit)
+                        closingSpeed=Vector3.new(flatVelocity.X-flatLocalVelocity.X,0,flatVelocity.Z-flatLocalVelocity.Z):Dot(flatOffset.Unit)
                     end
-                    local timeToImpact=math.huge
-                    if closingSpeed>0 then
-                        timeToImpact=distance/closingSpeed
+                    local emergency=false
+                    if distance<=2.75 then
+                        emergency=true
+                    elseif distance<=4.5 and closingSpeed>=2 then
+                        local timeToImpact=distance/closingSpeed
+                        if timeToImpact<=0.18 then emergency=true end
                     end
-                    local position=data.track.TimePosition or 0
-                    local realLength=data.track.Length
-                    local length=(realLength and realLength>0) and realLength or profile.length
-                    local speed=profile.speed
-                    local normalizedTime=position*speed
-                    local normalizedLength=length/speed
-                    local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
-                    local triggerTime=profile.triggerTime/profile.speed
-                    local triggerProgress=profile.triggerProgress
-                    local animationReady=position>=triggerTime or progress>=triggerProgress
-                    local shouldParry=false
-                    local isLunge=data.type=="lungehold"
-                    if isLunge then
-                        local lungeReady=closingSpeed>=LUNGE_MIN_SPEED and timeToImpact<=LUNGE_EARLY_TIME
-                        local lungeCritical=closingSpeed>=4 and timeToImpact<=LUNGE_CRITICAL_TIME
-                        if distance<=HARD_CLOSE_RANGE then
-                            shouldParry=true
-                        elseif distance<=STATE.autoParryRadius+LUNGE_TRAJECTORY_REACH and (animationReady or lungeReady or lungeCritical) then
-                            shouldParry=true
-                        end
-                        if shouldParry then
-                            if doParry(false,killerChar,distance,true,true,closingSpeed) then
-                                data.consumed=true
-                            end
-                        elseif lungeReady or lungeCritical then
-                            if checkLungeTrajectory(killerChar,distance,closingSpeed) then
-                                if doParry(false,killerChar,distance,true,true,closingSpeed) then
-                                    data.consumed=true
-                                end
-                            end
-                        end
+                    if emergency then
+                        if doParry(true) then data.consumed=true end
                     else
-                        if distance<=HARD_CLOSE_RANGE then
-                            shouldParry=true
-                        elseif animationReady and distance<=STATE.autoParryRadius then
-                            local movingCorrectly=true
-                            if flatOffset.Magnitude>0 and killerVelocity.Magnitude>8 then
-                                movingCorrectly=killerVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
-                            end
-                            if movingCorrectly then
-                                local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-                                local predictedPos=killerRoot.Position+killerVelocity*ping
-                                local predictedDistance=(localRoot.Position-predictedPos).Magnitude
-                                if predictedDistance<=STATE.autoParryRadius+2 then
-                                    shouldParry=true
+                        local position=data.track.TimePosition or 0
+                        local realLength=data.track.Length
+                        local length=(realLength and realLength>0) and realLength or profile.length
+                        local speed=profile.speed
+                        local normalizedTime=position*speed
+                        local normalizedLength=length/speed
+                        local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
+                        local triggerTime=profile.triggerTime/profile.speed
+                        local triggerProgress=profile.triggerProgress
+                        if position>=triggerTime or progress>=triggerProgress then
+                            if distance<=STATE.autoParryRadius then
+                                local movingCorrectly=true
+                                if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
+                                    movingCorrectly=flatVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
+                                end
+                                if movingCorrectly then
+                                    local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+                                    local predictedPos=killerRoot.Position+(flatVelocity*ping)
+                                    local predictedDistance=(localRoot.Position-predictedPos).Magnitude
+                                    if predictedDistance<=STATE.autoParryRadius+2 then
+                                        if doParry(false) then data.consumed=true end
+                                    end
                                 end
                             end
                         end
-                        if shouldParry then
-                            if doParry(false,killerChar,distance,false,false,closingSpeed) then
-                                data.consumed=true
+                    end
+                end
+            end
+        end
+    end)
+    RunService.Heartbeat:Connect(function()
+        if not STATE.autoParryEnabled then return end
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot then return end
+        local localPos=localRoot.Position
+        local localVelocity=localRoot.AssemblyLinearVelocity
+        local localFlatVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
+        for killerChar,data in pairs(STATE.activeSkillAttackers) do
+            if not killerChar or not killerChar.Parent or not data or not data.track then
+                STATE.activeSkillAttackers[killerChar]=nil
+            elseif not data.track.IsPlaying then
+                STATE.activeSkillAttackers[killerChar]=nil
+            elseif not data.consumed and data.skillId==SKILL_ANIM_ID then
+                if not isIgnoredSkillKiller(data.name) then
+                    local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+                    if killerRoot then
+                        local killerPos=killerRoot.Position
+                        local killerVelocity=killerRoot.AssemblyLinearVelocity
+                        local killerFlatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
+                        local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
+                        local distance=flatOffset.Magnitude
+                        if distance<=HIDDEN_RANGE then
+                            if doFastSkillParry() then data.consumed=true end
+                        elseif distance<=HIDDEN_RANGE+HIDDEN_SPEED*0.1 then
+                            local relative=killerFlatVelocity-localFlatVelocity
+                            local closingSpeed=flatOffset.Magnitude>0 and relative:Dot(flatOffset.Unit) or 0
+                            if closingSpeed>0 then
+                                local predictedDistance=distance-closingSpeed*HIDDEN_PREDICT_TIME
+                                if predictedDistance<=HIDDEN_RANGE then
+                                    local actualDistance=getSkillDistance(killerChar)
+                                    if actualDistance<=HIDDEN_RANGE then
+                                        if doFastSkillParry() then data.consumed=true end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        for killerChar,data in pairs(STATE.activeMaskedSkillAttackers) do
+            if not killerChar or not killerChar.Parent or not data or not data.track then
+                STATE.activeMaskedSkillAttackers[killerChar]=nil
+            elseif not data.track.IsPlaying then
+                STATE.activeMaskedSkillAttackers[killerChar]=nil
+            elseif not data.consumed and isMaskedKiller(data.name) and not STATE.ignoredTheMaskedDuck then
+                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+                if killerRoot then
+                    local killerPos=killerRoot.Position
+                    local killerVelocity=killerRoot.AssemblyLinearVelocity
+                    local killerFlatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
+                    local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
+                    local distance=flatOffset.Magnitude
+                    if distance<=STATE.autoParryRadius then
+                        if doFastSkillParry() then data.consumed=true end
+                    else
+                        local relative=killerFlatVelocity-localFlatVelocity
+                        local closingSpeed=flatOffset.Magnitude>0 and relative:Dot(flatOffset.Unit) or 0
+                        if closingSpeed>0 then
+                            local predictedDistance=distance-closingSpeed*0.05
+                            if predictedDistance<=STATE.autoParryRadius then
+                                local actualDistance=getSkillDistance(killerChar)
+                                if actualDistance<=STATE.autoParryRadius then
+                                    if doFastSkillParry() then data.consumed=true end
+                                end
                             end
                         end
                     end
@@ -507,9 +448,7 @@ do
     local SEGMENTS=32
     local lastRadius=-1
     local function buildRing()
-        for _,p in ipairs(espRing) do
-            if p and p.Parent then p:Destroy() end
-        end
+        for _,p in ipairs(espRing) do if p and p.Parent then p:Destroy() end end
         espRing={}
         espCache={}
         local step=(2*math.pi)/SEGMENTS
@@ -535,15 +474,11 @@ do
     local function updateSegmentSizes(radius)
         local arcLen=(2*math.pi*radius)/SEGMENTS
         for _,seg in ipairs(espRing) do
-            if seg and seg.Parent then
-                seg.Size=Vector3.new(0.08,0.08,arcLen+0.02)
-            end
+            if seg and seg.Parent then seg.Size=Vector3.new(0.08,0.08,arcLen+0.02) end
         end
     end
     local function destroyRing()
-        for _,p in ipairs(espRing) do
-            if p and p.Parent then p:Destroy() end
-        end
+        for _,p in ipairs(espRing) do if p and p.Parent then p:Destroy() end end
         espRing={}
         espCache={}
         lastRadius=-1
@@ -556,10 +491,7 @@ do
                 local root=localPlayer.Character:FindFirstChild("HumanoidRootPart")
                 if not root then return end
                 local radius=STATE.autoParryRadius
-                if radius~=lastRadius then
-                    updateSegmentSizes(radius)
-                    lastRadius=radius
-                end
+                if radius~=lastRadius then updateSegmentSizes(radius);lastRadius=radius end
                 local center=root.Position-Vector3.new(0,root.Size.Y/2+0.6,0)
                 for i,seg in ipairs(espRing) do
                     if seg and seg.Parent then
@@ -571,55 +503,10 @@ do
                 end
             end)
         else
-            if espLoop then
-                espLoop:Disconnect()
-                espLoop=nil
-            end
+            if espLoop then espLoop:Disconnect();espLoop=nil end
             destroyRing()
         end
     end
-    RunService.Heartbeat:Connect(function()
-        if not STATE.autoParryEnabled then return end
-        if next(STATE.activeSkillAttackers)==nil then return end
-        local localChar=localPlayer.Character
-        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-        if not localRoot then return end
-        local localPos=localRoot.Position
-        local localVel=getFlatVelocity(localRoot)
-        local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-        local predictionTime=math.min(ping+HIDDEN_PREDICT_TIME,0.3)
-        for killerChar,data in pairs(STATE.activeSkillAttackers) do
-            if not killerChar or not killerChar.Parent or not data or not data.track then
-                STATE.activeSkillAttackers[killerChar]=nil
-            elseif not data.track.IsPlaying then
-                STATE.activeSkillAttackers[killerChar]=nil
-            elseif not data.consumed and data.skillId==SKILL_ANIM_ID then
-                if not isIgnoredSkillKiller(data.name) then
-                    local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
-                    if killerRoot then
-                        local killerPos=killerRoot.Position
-                        local killerVel=getFlatVelocity(killerRoot)
-                        local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
-                        local distance=flatOffset.Magnitude
-                        if distance<=HIDDEN_RANGE then
-                            if doSkillParry(killerChar,distance) then
-                                data.consumed=true
-                            end
-                        else
-                            local predictedKiller=killerPos+killerVel*predictionTime
-                            local predictedLocal=localPos+localVel*predictionTime
-                            local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
-                            if predictedDistance<=HIDDEN_RANGE then
-                                if doSkillParry(killerChar,predictedDistance) then
-                                    data.consumed=true
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end)
 end
 RunService.Heartbeat:Connect(function(dt)
     for i=1,#MasterTasks do
@@ -650,6 +537,7 @@ local function BuildUI()
             if not v then
                 STATE.activeAttackers={}
                 STATE.activeSkillAttackers={}
+                STATE.activeMaskedSkillAttackers={}
             end
         end,
     })
@@ -692,6 +580,11 @@ local function BuildUI()
                 for char,data in pairs(STATE.activeSkillAttackers) do
                     if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then
                         STATE.activeSkillAttackers[char]=nil
+                    end
+                end
+                for char,data in pairs(STATE.activeMaskedSkillAttackers) do
+                    if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then
+                        STATE.activeMaskedSkillAttackers[char]=nil
                     end
                 end
             end
