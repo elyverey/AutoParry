@@ -384,17 +384,39 @@ do
                     if emergency then
                         if doParry(true,killerChar,distance) then data.consumed=true end
                     else
-                        local progress=data.track.TimePosition
-                        local length=profile.length
-                        local speed=profile.speed>0 and profile.speed or 1
-                        local remaining=length>0 and math.max(0,(length-progress)/speed) or 0
-                        local triggerByProgress=length>0 and progress>=length*profile.triggerProgress
-                        local triggerByTime=remaining<=profile.triggerTime
-                        if triggerByProgress or triggerByTime then
-                            local range=STATE.autoParryRadius
-                            if distance<=range then
-                                if doParry(false,killerChar,distance) then
-                                    data.consumed=true
+                        local position=data.track.TimePosition or 0
+                        local realLength=data.track.Length
+                        local length=(realLength and realLength>0) and realLength or profile.length
+                        local speed=profile.speed
+                        local normalizedTime=position*speed
+                        local normalizedLength=length/speed
+                        local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
+                        local triggerTime=profile.triggerTime/profile.speed
+                        local triggerProgress=profile.triggerProgress
+                        local animationReady=position>=triggerTime or progress>=triggerProgress
+                        local lungeReady=false
+                        local critical=false
+                        if profile.type=="lungehold" then
+                            local attackReach=3.5
+                            local impactDistance=math.max(distance-attackReach,0)
+                            local timeToImpact=math.huge
+                            if closingSpeed>0 then timeToImpact=impactDistance/closingSpeed end
+                            lungeReady=closingSpeed>=6 and timeToImpact<=0.32
+                            critical=closingSpeed>=4 and timeToImpact<=0.16
+                        end
+                        if animationReady or lungeReady or critical then
+                            if distance<=STATE.autoParryRadius then
+                                local movingCorrectly=true
+                                if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
+                                    movingCorrectly=flatVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
+                                end
+                                if movingCorrectly then
+                                    local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+                                    local predictedPos=killerRoot.Position+(flatVelocity*ping)
+                                    local predictedDistance=(localRoot.Position-predictedPos).Magnitude
+                                    if predictedDistance<=STATE.autoParryRadius+2 then
+                                        if doParry(false,killerChar,distance) then data.consumed=true end
+                                    end
                                 end
                             end
                         end
@@ -429,8 +451,8 @@ do
                         local closingSpeed=currentDistance>0 and relativeVel:Dot(flatOffset.Unit) or 0
                         local timeBuffer=0.22+ping
                         local dynamicRange=HIDDEN_RANGE+math.max(0,closingSpeed*timeBuffer)
-                        local predictedKillerPos=killerPos+killerFlatVel*(ping+0.05)
-                        local predictedLocalPos=localPos+localFlatVel*ping
+                        local predictedKillerPos=killerPos+(killerFlatVel*(ping+0.05))
+                        local predictedLocalPos=localPos+(localFlatVel*ping)
                         local predictedDistance=(Vector3.new(predictedLocalPos.X,0,predictedLocalPos.Z)-Vector3.new(predictedKillerPos.X,0,predictedKillerPos.Z)).Magnitude
                         local isHeadingTowards=true
                         if killerFlatVel.Magnitude>3 and flatOffset.Magnitude>0 then
@@ -465,8 +487,8 @@ do
                     local closingSpeed=currentDistance>0 and relativeVel:Dot(flatOffset.Unit) or 0
                     local timeBuffer=0.20+ping
                     local dynamicRange=STATE.autoParryRadius+math.max(0,closingSpeed*timeBuffer)
-                    local predictedKillerPos=killerPos+killerFlatVel*(ping+0.04)
-                    local predictedLocalPos=localPos+localFlatVel*ping
+                    local predictedKillerPos=killerPos+(killerFlatVel*(ping+0.04))
+                    local predictedLocalPos=localPos+(localFlatVel*ping)
                     local predictedDistance=(Vector3.new(predictedLocalPos.X,0,predictedLocalPos.Z)-Vector3.new(predictedKillerPos.X,0,predictedKillerPos.Z)).Magnitude
                     local isHeadingTowards=true
                     if killerFlatVel.Magnitude>3 and flatOffset.Magnitude>0 then
@@ -485,87 +507,178 @@ do
             end
         end
     end)
-    RunService.RenderStepped:Connect(function()
-        if not STATE.autoParryRadiusEsp then
-            if toggleAutoParryESP then toggleAutoParryESP:SetVisible(false) end
-            return
+    local espRing={}
+    local espLoop=nil
+    local espCache={}
+    local SEGMENTS=32
+    local lastRadius=-1
+    local function buildRing()
+        for _,p in ipairs(espRing) do
+            if p and p.Parent then p:Destroy() end
         end
-        if toggleAutoParryESP then toggleAutoParryESP:SetVisible(true) end
-        local char=localPlayer.Character
-        local root=char and char:FindFirstChild("HumanoidRootPart")
-        if not root then return end
-        local radius=STATE.autoParryRadius
-        local existing=Workspace:FindFirstChild("BOLONG_ParryRadius")
-        if not existing then
-            existing=Instance.new("Part")
-            existing.Name="BOLONG_ParryRadius"
-            existing.Shape=Enum.PartType.Cylinder
-            existing.Anchored=true
-            existing.CanCollide=false
-            existing.CanQuery=false
-            existing.CanTouch=false
-            existing.Transparency=0.65
-            existing.Material=Enum.Material.ForceField
-            existing.Size=Vector3.new(0.08,radius*2,radius*2)
-            existing.Parent=Workspace
+        espRing={}
+        espCache={}
+        local step=(2*math.pi)/SEGMENTS
+        for i=1,SEGMENTS do
+            local angle=step*(i-1)
+            local nextAngle=step*i
+            espCache[i]={cx=math.cos(angle),cz=math.sin(angle),nx=math.cos(nextAngle),nz=math.sin(nextAngle)}
+            local seg=Instance.new("Part")
+            seg.Shape=Enum.PartType.Block
+            seg.Anchored=true
+            seg.CanCollide=false
+            seg.CanQuery=false
+            seg.CastShadow=false
+            seg.Material=Enum.Material.Neon
+            seg.Color=Color3.fromRGB(255,255,255)
+            seg.Transparency=0.15
+            seg.Size=Vector3.new(0.08,0.08,0.1)
+            seg.Name="BolongESP_Seg"
+            seg.Parent=Workspace
+            espRing[i]=seg
         end
-        existing.Size=Vector3.new(0.08,radius*2,radius*2)
-        existing.CFrame=CFrame.new(root.Position)*CFrame.Angles(0,0,math.rad(90))
-    end)
-end
-RegisterTask("MasterHeartbeat",0,function()
-    for i=#MasterTasks,1,-1 do
-        local taskData=MasterTasks[i]
-        if taskData then
-            taskData.timer+=0
-            if taskData.timer>=taskData.interval then
-                taskData.timer=0
-                taskData.fn()
+    end
+    local function updateSegmentSizes(radius)
+        local arcLen=(2*math.pi*radius)/SEGMENTS
+        for _,seg in ipairs(espRing) do
+            if seg and seg.Parent then
+                seg.Size=Vector3.new(0.08,0.08,arcLen+0.02)
             end
         end
     end
-end)
-RunService.Heartbeat:Connect(function()
-    for i=#MasterTasks,1,-1 do
-        local taskData=MasterTasks[i]
-        if taskData then
-            taskData.fn()
+    local function destroyRing()
+        for _,p in ipairs(espRing) do
+            if p and p.Parent then p:Destroy() end
+        end
+        espRing={}
+        espCache={}
+        lastRadius=-1
+    end
+    function toggleAutoParryESP(state)
+        if state then
+            buildRing()
+            espLoop=RunService.RenderStepped:Connect(function()
+                if not localPlayer.Character then return end
+                local root=localPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+                local radius=STATE.autoParryRadius
+                if radius~=lastRadius then
+                    updateSegmentSizes(radius)
+                    lastRadius=radius
+                end
+                local center=root.Position-Vector3.new(0,root.Size.Y/2+0.6,0)
+                for i,seg in ipairs(espRing) do
+                    if seg and seg.Parent then
+                        local c=espCache[i]
+                        local pos=center+Vector3.new(c.cx*radius,0,c.cz*radius)
+                        local nxt=center+Vector3.new(c.nx*radius,0,c.nz*radius)
+                        seg.CFrame=CFrame.lookAt(pos,nxt)*CFrame.new(0,0,-seg.Size.Z/2)
+                    end
+                end
+            end)
+        else
+            if espLoop then
+                espLoop:Disconnect()
+                espLoop=nil
+            end
+            destroyRing()
+        end
+    end
+end
+RunService.Heartbeat:Connect(function(dt)
+    for i=1,#MasterTasks do
+        local t=MasterTasks[i]
+        t.timer=t.timer+dt
+        if t.timer>=t.interval then
+            t.timer=0
+            t.fn(dt)
         end
     end
 end)
 local function BuildUI()
-    local Window=Chloex:CreateWindow({Title="BOLONG-HUB "..VERSION,SubTitle="Auto Parry",TabWidth=160,Size=UDim2.fromOffset(560,420),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.LeftControl})
-    local MainTab=Window:AddTab({Title="Combat",Icon="sword"})
-    local MainSection=MainTab:AddSection("Auto Parry")
-    MainSection:AddToggle("AutoParry",{Title="Auto Parry",Default=false,Callback=function(v)
-        STATE.autoParryEnabled=v
-        if not v then
-            table.clear(STATE.activeAttackers)
-            table.clear(STATE.activeSkillAttackers)
-            table.clear(STATE.activeMaskedSkillAttackers)
-        end
-    end})
-    MainSection:AddToggle("RadiusESP",{Title="Radius ESP",Default=false,Callback=function(v)
-        STATE.autoParryRadiusEsp=v
-    end})
-    MainSection:AddToggle("IgnoreHidden",{Title="The Hidden",Default=false,Callback=function(v)
-        STATE.ignoredTheHidden=v
-        if v then table.clear(STATE.activeSkillAttackers) end
-    end})
-    MainSection:AddToggle("IgnoreAbysswalker",{Title="The Abysswalker",Default=false,Callback=function(v)
-        STATE.ignoredTheAbysswalker=v
-    end})
-    MainSection:AddToggle("IgnoreMaskedDuck",{Title="The Masked (Duck)",Default=false,Callback=function(v)
-        STATE.ignoredTheMaskedDuck=v
-        if v then table.clear(STATE.activeMaskedSkillAttackers) end
-    end})
-    MainSection:AddSlider("ParryRadius",{Title="Parry Radius",Default=11,Min=4,Max=40,Rounding=1,Callback=function(v)
-        STATE.autoParryRadius=v
-    end})
-    MainSection:AddSlider("AimStrictness",{Title="Aim Strictness",Default=0.1,Min=0,Max=1,Rounding=2,Callback=function(v)
-        STATE.aimStrictness=v
-    end})
-    Notify("BOLONG-HUB","Loaded "..VERSION,2)
+    local Window=Chloex:Window({
+        Title="BOLONG-HUB",
+        Image="84034353458936",
+        Footer="Violence District",
+        Author="Discord.gg/pWpgqVGxNK",
+        Color=ACCENT_COLOR,Version=1,Search=true,
+        Folder="BolongHub",
+    })
+    local ExclusiveTab=Window:AddTab({Name="Exclusive",Icon="sparkles"})
+    local APSection=ExclusiveTab:AddSection("Auto Parry",nil)
+    local APH1=APSection:AddHStack()
+    APH1:AddToggle({
+        Title="Auto Parry",Default=false,
+        Callback=function(v)
+            STATE.autoParryEnabled=v
+            if not v then
+                STATE.activeAttackers={}
+                STATE.activeSkillAttackers={}
+                STATE.activeMaskedSkillAttackers={}
+            end
+        end,
+    })
+    APH1:AddToggle({
+        Title="Radius ESP",Default=false,
+        Callback=function(v)
+            STATE.autoParryRadiusEsp=v
+            if toggleAutoParryESP then toggleAutoParryESP(v) end
+        end,
+    })
+    APSection:AddToggle({
+        Title="The Hidden",Default=false,
+        Callback=function(v)
+            STATE.ignoredTheHidden=v
+            if v then
+                for char,data in pairs(STATE.activeSkillAttackers) do
+                    if data.name and data.name:lower()=="the hidden" then
+                        STATE.activeSkillAttackers[char]=nil
+                    end
+                end
+            end
+        end,
+    })
+    APSection:AddToggle({
+        Title="The Abysswalker",Default=false,
+        Callback=function(v)
+            STATE.ignoredTheAbysswalker=v
+        end,
+    })
+    APSection:AddToggle({
+        Title="The Masked (Duck)",Default=false,
+        Callback=function(v)
+            STATE.ignoredTheMaskedDuck=v
+            if v then
+                for char,data in pairs(STATE.activeAttackers) do
+                    if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then
+                        STATE.activeAttackers[char]=nil
+                    end
+                end
+                for char,data in pairs(STATE.activeSkillAttackers) do
+                    if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then
+                        STATE.activeSkillAttackers[char]=nil
+                    end
+                end
+                for char,data in pairs(STATE.activeMaskedSkillAttackers) do
+                    if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then
+                        STATE.activeMaskedSkillAttackers[char]=nil
+                    end
+                end
+            end
+        end,
+    })
+    APSection:AddSlider({
+        Title="Parry Radius (Stud)",Min=4,Max=40,Default=11,Increment=1,
+        Callback=function(v)
+            STATE.autoParryRadius=v
+        end,
+    })
+    APSection:AddSlider({
+        Title="Aim Strictness",Min=-1,Max=1,Default=0.1,Increment=0.1,
+        Callback=function(v)
+            STATE.aimStrictness=v
+        end,
+    })
 end
 BuildUI()
-print("[BOLONG-HUB] "..VERSION.." loaded.")
+print("BOLONGHUB LITE LOADED!")
