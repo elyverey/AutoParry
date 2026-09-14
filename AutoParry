@@ -20,6 +20,10 @@ end
 local toggleAutoParryESP
 do
     local SKILL_ANIM_ID=98163597193511
+    local HIDDEN_SKILL_ANIMS={
+        [98163597193511]={name="98163597193511",speed=1.00,length=0},
+        [123809268724645]={name="Animation1",speed=1.00,length=3.98}
+    }
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
     local HIDDEN_RANGE=30
     local HIDDEN_SPEED=13.8
@@ -202,10 +206,10 @@ do
         end
         return false
     end
-    local function registerSkillAttack(char,kName,track)
+    local function registerSkillAttack(char,kName,track,skillId)
         if kName:lower()~="the hidden" then return end
         if isIgnoredSkillKiller(kName) then return end
-        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=SKILL_ANIM_ID}
+        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=skillId or SKILL_ANIM_ID,skillProfile=HIDDEN_SKILL_ANIMS[skillId or SKILL_ANIM_ID]}
         STATE.activeSkillAttackers[char]=data
         local conn
         conn=track.Stopped:Connect(function()
@@ -261,8 +265,9 @@ do
                         if not STATE.autoParryEnabled then return end
                         if not track or not track.Animation then return end
                         local animId=track.Animation.AnimationId
-                        if animId==INSTANT_ANIM_ID and kName:lower()=="the hidden" then
-                            registerSkillAttack(char,kName,track)
+                        local numericId=tonumber(animId:match("%d+"))
+                        if HIDDEN_SKILL_ANIMS[numericId] and kName:lower()=="the hidden" then
+                            registerSkillAttack(char,kName,track,numericId)
                             return
                         end
                         local maskedProfile=MASKED_EXTRA_ANIMS[animId]
@@ -272,7 +277,6 @@ do
                         end
                         local profile=VALID_ANIM_IDS[animId]
                         if not profile then return end
-                        local numericId=tonumber(animId:match("%d+"))
                         local data={name=kName,track=track,type=profile.type,id=numericId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1}
                         STATE.activeAttackers[char]=data
                         local conn
@@ -435,7 +439,7 @@ do
                 STATE.activeSkillAttackers[killerChar]=nil
             elseif not data.track.IsPlaying then
                 STATE.activeSkillAttackers[killerChar]=nil
-            elseif not data.consumed and data.skillId==SKILL_ANIM_ID and data.name and data.name:lower()=="the hidden" then
+            elseif not data.consumed and data.skillId and HIDDEN_SKILL_ANIMS[data.skillId] and data.name and data.name:lower()=="the hidden" then
                 if not isIgnoredSkillKiller(data.name) then
                     local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                     if killerRoot then
@@ -670,3 +674,4 @@ local function BuildUI()
 end
 BuildUI()
 print("BOLONGHUB LITE LOADED!")
+      
