@@ -24,7 +24,9 @@ do
         [98163597193511]={name="98163597193511",speed=1.00,length=0},
         [123809268724645]={name="Animation1",speed=1.00,length=3.98}
     }
+    local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
     local HIDDEN_RANGE=30
+    local HIDDEN_SPEED=13.8
     local HIDDEN_PREDICT_TIME=0.08
     local MASKED_EXTRA_ANIMS={
         ["rbxassetid://117070354890871"]={type="lungehold",length=2.00,speed=1.00},
@@ -192,8 +194,9 @@ do
         return (Vector3.new(a.X,0,a.Z)-Vector3.new(b.X,0,b.Z)).Magnitude
     end
     local function tryHiddenParry(char,data)
-        if data.consumed or not STATE.autoParryEnabled or STATE.ignoredTheHidden then return false end
-        if not data.name or data.name:lower()~="the hidden" then return false end
+        if data.consumed or not STATE.autoParryEnabled then return false end
+        if isIgnoredSkillKiller(data.name) then return false end
+        if data.name:lower()~="the hidden" then return false end
         local distance=getSkillDistance(char)
         if distance<=HIDDEN_RANGE then
             if doSkillParry() then
@@ -204,16 +207,14 @@ do
         return false
     end
     local function registerSkillAttack(char,kName,track,skillId)
-        if not kName or kName:lower()~="the hidden" then return end
-        if STATE.ignoredTheHidden then return end
-        local id=skillId or SKILL_ANIM_ID
-        if not HIDDEN_SKILL_ANIMS[id] then return end
-        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=id,skillProfile=HIDDEN_SKILL_ANIMS[id],lastCheck=tick()}
+        if kName:lower()~="the hidden" then return end
+        if isIgnoredSkillKiller(kName) then return end
+        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=skillId or SKILL_ANIM_ID,skillProfile=HIDDEN_SKILL_ANIMS[skillId or SKILL_ANIM_ID]}
         STATE.activeSkillAttackers[char]=data
         local conn
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
-            task.delay(0.2,function()
+            task.defer(function()
                 if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
                     STATE.activeSkillAttackers[char]=nil
                 end
@@ -384,7 +385,7 @@ do
                     if emergency then
                         if doParry(true,killerChar,distance) then data.consumed=true end
                     else
-                    local position=data.track.TimePosition or 0
+                        local position=data.track.TimePosition or 0
                         local realLength=data.track.Length
                         local length=(realLength and realLength>0) and realLength or profile.length
                         local speed=profile.speed
@@ -436,8 +437,10 @@ do
         for killerChar,data in pairs(STATE.activeSkillAttackers) do
             if not killerChar or not killerChar.Parent or not data or not data.track then
                 STATE.activeSkillAttackers[killerChar]=nil
+            elseif not data.track.IsPlaying then
+                STATE.activeSkillAttackers[killerChar]=nil
             elseif not data.consumed and data.skillId and HIDDEN_SKILL_ANIMS[data.skillId] and data.name and data.name:lower()=="the hidden" then
-                if not STATE.ignoredTheHidden then
+                if not isIgnoredSkillKiller(data.name) then
                     local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                     if killerRoot then
                         local killerPos=killerRoot.Position
@@ -446,9 +449,7 @@ do
                         local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
                         local distance=flatOffset.Magnitude
                         if distance<=HIDDEN_RANGE then
-                            if doSkillParry() then
-                                data.consumed=true
-                            end
+                            if doSkillParry() then data.consumed=true end
                         else
                             local relative=killerFlatVelocity-localFlatVelocity
                             local closingSpeed=flatOffset.Magnitude>0 and relative:Dot(flatOffset.Unit) or 0
@@ -457,9 +458,7 @@ do
                                 if predictedDistance<=HIDDEN_RANGE then
                                     local actualDistance=getSkillDistance(killerChar)
                                     if actualDistance<=HIDDEN_RANGE then
-                                        if doSkillParry() then
-                                            data.consumed=true
-                                        end
+                                        if doSkillParry() then data.consumed=true end
                                     end
                                 end
                             end
@@ -470,6 +469,8 @@ do
         end
         for killerChar,data in pairs(STATE.activeMaskedSkillAttackers) do
             if not killerChar or not killerChar.Parent or not data or not data.track then
+                STATE.activeMaskedSkillAttackers[killerChar]=nil
+            elseif not data.track.IsPlaying then
                 STATE.activeMaskedSkillAttackers[killerChar]=nil
             elseif not data.consumed and isMaskedKiller(data.name) and not STATE.ignoredTheMaskedDuck then
                 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
