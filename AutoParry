@@ -26,9 +26,6 @@ do
     local SKILL_LUNGE_ANIM="rbxassetid://"..SKILL_LUNGE_ID
     local HIDDEN_SKILL_ANIM="rbxassetid://"..HIDDEN_SKILL_ID
     local SKILL_DETECTION_RANGE=50
-    local SKILL_MIN_SPEED=7
-    local SKILL_DIRECTION_DOT=0.25
-    local SKILL_PREDICT_TIME=0.22
     local SKILL_CHAIN_TIMEOUT=3
     local ATTACK_PROFILES={
         [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
@@ -122,7 +119,7 @@ do
         local char=localPlayer.Character
         return char and char:FindFirstChild("HumanoidRootPart")
     end
-    local function getDistance(char)
+    local function getFlatDistance(char)
         local localRoot=getLocalRoot()
         local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
         if not localRoot or not killerRoot then return math.huge end
@@ -130,31 +127,16 @@ do
         local b=killerRoot.Position
         return (Vector3.new(a.X,0,a.Z)-Vector3.new(b.X,0,b.Z)).Magnitude
     end
-    local function getApproachInfo(char)
-        local localRoot=getLocalRoot()
-        local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
-        if not localRoot or not killerRoot then return false,math.huge,0,0,math.huge end
-        local localPos=Vector3.new(localRoot.Position.X,0,localRoot.Position.Z)
-        local killerPos=Vector3.new(killerRoot.Position.X,0,killerRoot.Position.Z)
-        local offset=localPos-killerPos
-        local distance=offset.Magnitude
-        if distance<=0.05 then return true,distance,999,1,0 end
-        local killerVel=killerRoot.AssemblyLinearVelocity
-        local localVel=localRoot.AssemblyLinearVelocity
-        local relativeVel=Vector3.new(killerVel.X-localVel.X,0,killerVel.Z-localVel.Z)
-        local relativeSpeed=relativeVel.Magnitude
-        local closingSpeed=relativeVel:Dot(offset.Unit)
-        local directionDot=relativeSpeed>0 and relativeVel.Unit:Dot(offset.Unit) or 0
-        local predictedOffset=offset-relativeVel*SKILL_PREDICT_TIME
-        local predictedDistance=predictedOffset.Magnitude
-        local rushing=relativeSpeed>=SKILL_MIN_SPEED and closingSpeed>=SKILL_MIN_SPEED and directionDot>=SKILL_DIRECTION_DOT
-        return rushing,distance,closingSpeed,directionDot,predictedDistance
-    end
-    local function isValidSkillRush(char)
-        local rushing,distance,closingSpeed,directionDot,predictedDistance=getApproachInfo(char)
-        if distance>SKILL_DETECTION_RANGE then return false end
-        if rushing then return true end
-        if closingSpeed>0 and predictedDistance<=math.max(3,distance-1.5) then return true end
+    local function parrySkillImmediately(char,data)
+        if not STATE.autoParryEnabled or data.consumed then return false end
+        if isIgnoredSkillKiller(data.name) then return false end
+        local distance=getFlatDistance(char)
+        if distance<=SKILL_DETECTION_RANGE then
+            if doParry(true) then
+                data.consumed=true
+                return true
+            end
+        end
         return false
     end
     local function registerSkillStart(char,kName,track)
@@ -178,31 +160,18 @@ do
             end)
         end)
     end
-    local function registerSkillLunge(char,kName,track,skillId)
+    local function registerSpecialSkill(char,kName,track,skillId,hiddenOnly)
+        if hiddenOnly and kName:lower()~="the hidden" then return end
         if isIgnoredSkillKiller(kName) then return end
-        local state=STATE.skillStates[char]
-        if not state or tick()-state.started>SKILL_CHAIN_TIMEOUT then
-            state={name=kName,started=tick(),track=nil,startPlaying=false,lunging=false}
-            STATE.skillStates[char]=state
-        end
-        state.lunging=true
-        state.lungeTrack=track
-        state.skillId=skillId
-        local data={name=kName,track=track,type="skill_lunge",started=tick(),consumed=false,skillId=skillId}
+        local data={name=kName,track=track,type="special_skill",started=tick(),consumed=false,skillId=skillId}
         STATE.activeSkillAttackers[char]=data
-        if isValidSkillRush(char) then
-            if doParry(true) then data.consumed=true end
-        end
+        parrySkillImmediately(char,data)
         local conn
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.delay(0.08,function()
                 if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
                     STATE.activeSkillAttackers[char]=nil
-                end
-                local current=STATE.skillStates[char]
-                if current and current.lungeTrack==track then
-                    STATE.skillStates[char]=nil
                 end
             end)
         end)
@@ -236,13 +205,11 @@ do
                             return
                         end
                         if animId==SKILL_LUNGE_ANIM then
-                            registerSkillLunge(char,kName,track,SKILL_LUNGE_ID)
+                            registerSpecialSkill(char,kName,track,SKILL_LUNGE_ID,false)
                             return
                         end
                         if animId==HIDDEN_SKILL_ANIM then
-                            if kName:lower()=="the hidden" then
-                                registerSkillLunge(char,kName,track,HIDDEN_SKILL_ID)
-                            end
+                            registerSpecialSkill(char,kName,track,HIDDEN_SKILL_ID,true)
                             return
                         end
                         local profile=VALID_ANIM_IDS[animId]
@@ -326,15 +293,15 @@ do
                     local triggerReached=position>=triggerTime or progress>=triggerProgress
                     if triggerReached and distance<=STATE.autoParryRadius then
                         local killerVelocity=killerRoot.AssemblyLinearVelocity
-                        local localVelocity=localRoot.AssemblyLinearVelocity
                         local flatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
-                        local flatLocalVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
                         local movingCorrectly=true
                         if offset.Magnitude>0 and flatVelocity.Magnitude>3 then
                             movingCorrectly=flatVelocity.Unit:Dot(offset.Unit)>=STATE.aimStrictness
                         end
                         if movingCorrectly then
                             local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+                            local localVelocity=localRoot.AssemblyLinearVelocity
+                            local flatLocalVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
                             local relativeVelocity=flatVelocity-flatLocalVelocity
                             local predictedPos=killerRoot.Position+relativeVelocity*ping
                             local predictedDistance=(Vector3.new(localRoot.Position.X,0,localRoot.Position.Z)-Vector3.new(predictedPos.X,0,predictedPos.Z)).Magnitude
@@ -347,7 +314,7 @@ do
             end
         end
     end)
-    RegisterTask("SkillLungeMonitor",0,function()
+    RegisterTask("SpecialSkillMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         for killerChar,data in pairs(STATE.activeSkillAttackers) do
             if not killerChar or not killerChar.Parent or not data.track then
@@ -355,8 +322,33 @@ do
             elseif not data.track.IsPlaying then
                 STATE.activeSkillAttackers[killerChar]=nil
             elseif not data.consumed then
-                if isValidSkillRush(killerChar) then
-                    if doParry(true) then data.consumed=true end
+                parrySkillImmediately(killerChar,data)
+            end
+        end
+    end)
+    RegisterTask("SkillStartFallback",0,function()
+        if not STATE.autoParryEnabled then return end
+        for killerChar,state in pairs(STATE.skillStates) do
+            if killerChar and killerChar.Parent and state and state.started and tick()-state.started<=SKILL_CHAIN_TIMEOUT then
+                local humanoid=killerChar:FindFirstChildOfClass("Humanoid")
+                local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
+                if animator then
+                    for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
+                        if track.Animation then
+                            local animId=track.Animation.AnimationId
+                            if animId==SKILL_LUNGE_ANIM then
+                                if not STATE.activeSkillAttackers[killerChar] then
+                                    registerSpecialSkill(killerChar,state.name,track,SKILL_LUNGE_ID,false)
+                                end
+                                break
+                            elseif animId==HIDDEN_SKILL_ANIM and state.name:lower()=="the hidden" then
+                                if not STATE.activeSkillAttackers[killerChar] then
+                                    registerSpecialSkill(killerChar,state.name,track,HIDDEN_SKILL_ID,true)
+                                end
+                                break
+                            end
+                        end
+                    end
                 end
             end
         end
