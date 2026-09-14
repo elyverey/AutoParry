@@ -116,44 +116,112 @@ do
         if now-STATE.lastParryTime<0.01 then return false end
         if killerChar and distance then
             local allowedRange=STATE.autoParryRadius
-            local allowVault=false
-            local data=STATE.activeAttackers[killerChar]
-            if data and data.profile and data.profile.type=="lungehold" then
-                allowVault=true
-            end
             if distance>allowedRange then return false end
-            local function pathClear()
-                local localChar=localPlayer.Character
-                local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
-                if not localRoot or not killerRoot then return false end
-                local origin=localRoot.Position
-                local target=killerRoot.Position
-                local direction=target-origin
+            local localChar=localPlayer.Character
+            local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+            local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+            if not localRoot or not killerRoot then return false end
+            local data=STATE.activeAttackers[killerChar]
+            local profile=data and data.profile
+            local killerVelocity=killerRoot.AssemblyLinearVelocity
+            local localVelocity=localRoot.AssemblyLinearVelocity
+            local killerFlatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
+            local localFlatVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
+            local flatOffset=Vector3.new(localRoot.Position.X-killerRoot.Position.X,0,localRoot.Position.Z-killerRoot.Position.Z)
+            local flatDistance=flatOffset.Magnitude
+            if flatDistance<=0.05 then
+                STATE.lastParryTime=now
+                sendParryInput()
+                return true
+            end
+            local toPlayer=flatOffset.Unit
+            local attackDirection=Vector3.new(killerRoot.CFrame.LookVector.X,0,killerRoot.CFrame.LookVector.Z)
+            local attackDot=0
+            if attackDirection.Magnitude>0.05 then
+                attackDot=attackDirection.Unit:Dot(toPlayer)
+            end
+            local relativeVelocity=killerFlatVelocity-localFlatVelocity
+            local closingSpeed=relativeVelocity:Dot(toPlayer)
+            local predictedKiller=killerRoot.Position+killerFlatVelocity*math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+            local predictedLocal=localRoot.Position+localFlatVelocity*math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+            local predictedOffset=Vector3.new(predictedLocal.X-predictedKiller.X,0,predictedLocal.Z-predictedKiller.Z)
+            local predictedDistance=predictedOffset.Magnitude
+            local isLunge=profile and profile.type=="lungehold"
+            local aimThreshold=math.clamp(STATE.aimStrictness,0.05,0.75)
+            local trajectoryGood=closingSpeed>=1.5
+            local aimGood=attackDot>=aimThreshold
+            if isLunge then
+                aimThreshold=math.clamp(STATE.aimStrictness-0.15,0,0.55)
+                aimGood=attackDot>=aimThreshold
+                trajectoryGood=closingSpeed>=0.75 or killerFlatVelocity.Magnitude>=8
+            end
+            if not aimGood and not trajectoryGood then return false end
+            local params=RaycastParams.new()
+            params.FilterType=Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances={localChar,killerChar}
+            params.IgnoreWater=true
+            local killerCF=killerRoot.CFrame
+            local playerCF=localRoot.CFrame
+            local killerBase=killerRoot.Position+Vector3.new(0,1.0,0)
+            local playerBase=localRoot.Position+Vector3.new(0,1.0,0)
+            local sampleRadius=1.05
+            local sourceOffsets={
+                Vector3.new(0,0,0),
+                killerCF.RightVector*0.55,
+                killerCF.RightVector*-0.55
+            }
+            local targetOffsets={
+                Vector3.new(0,0,0),
+                playerCF.RightVector*sampleRadius,
+                playerCF.RightVector*-sampleRadius,
+                playerCF.LookVector*sampleRadius,
+                playerCF.LookVector*-sampleRadius,
+                (playerCF.RightVector+playerCF.LookVector).Unit*sampleRadius,
+                (playerCF.RightVector-playerCF.LookVector).Unit*sampleRadius,
+                (-playerCF.RightVector+playerCF.LookVector).Unit*sampleRadius,
+                (-playerCF.RightVector-playerCF.LookVector).Unit*sampleRadius
+            }
+            local function castClear(from,to)
+                local direction=to-from
                 if direction.Magnitude<=0.05 then return true end
-                local params=RaycastParams.new()
-                params.FilterType=Enum.RaycastFilterType.Exclude
-                params.FilterDescendantsInstances={localChar,killerChar}
-                params.IgnoreWater=true
-                local offsets={Vector3.new(0,0,0),Vector3.new(0,1.1,0),Vector3.new(0,-0.75,0)}
-                local vaultHit=false
-                for _,offset in ipairs(offsets) do
-                    local result=Workspace:Raycast(origin+offset,direction,params)
-                    if not result then return true end
-                    local hit=result.Instance
-                    if hit then
-                        local n=hit.Name:lower()
-                        if n:find("vault") or n:find("window") or n:find("ledge") then
-                            vaultHit=true
+                local result=Workspace:Raycast(from,direction,params)
+                if not result then return true end
+                return not result.Instance:IsA("BasePart")
+            end
+            local clearCount=0
+            local centerClear=false
+            local nearestClear=false
+            for sourceIndex,sourceOffset in ipairs(sourceOffsets) do
+                local source=killerBase+sourceOffset
+                for targetIndex,targetOffset in ipairs(targetOffsets) do
+                    local target=playerBase+targetOffset
+                    if castClear(source,target) then
+                        clearCount=clearCount+1
+                        if sourceIndex==1 and targetIndex==1 then
+                            centerClear=true
+                        end
+                        if sourceIndex==1 and targetIndex<=5 then
+                            nearestClear=true
                         end
                     end
                 end
-                if allowVault and vaultHit and distance<=allowedRange+VAULT_EXTRA_RANGE then
-                    return true
-                end
-                return false
             end
-            if not pathClear() then return false end
+            local totalRays=#sourceOffsets*#targetOffsets
+            local clearRatio=clearCount/totalRays
+            if not centerClear and not nearestClear and clearCount<3 then return false end
+            if clearRatio<0.18 then return false end
+            if clearCount==0 then return false end
+            if blockedCount>=#samples-1 and not edgeClear then return false end
+            if blockedCount>0 and not edgeClear then return false end
+            if blockedCount>0 then
+                local edgeVelocity=Vector3.new(killerFlatVelocity.X,0,killerFlatVelocity.Z)
+                local edgeApproach=0
+                if edgeVelocity.Magnitude>0 then
+                    edgeApproach=edgeVelocity.Unit:Dot(toPlayer)
+                end
+                if edgeApproach<0.15 and closingSpeed<3 then return false end
+                if predictedDistance>allowedRange+2 then return false end
+            end
         end
         STATE.lastParryTime=now
         sendParryInput()
@@ -674,4 +742,3 @@ local function BuildUI()
 end
 BuildUI()
 print("BOLONGHUB LITE LOADED!")
-      
