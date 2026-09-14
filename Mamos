@@ -42,29 +42,29 @@ do
     local VAULT_EXTRA_RANGE=2.25
 
     local ATTACK_PROFILES={
-        -- Standard Attacks & Lunges
-        [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
-        [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
-        [135002183282873]={type="lungehold",length=1.50,speed=1.00,triggerProgress=0.015,triggerTime=0.022},
-        [121216847022485]={type="attack",length=1.75,speed=1.00,triggerProgress=0.015,triggerTime=0.025},
-        [117042998468241]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
-        [133963973694098]={type="attack",length=1.72,speed=1.00,triggerProgress=0.016,triggerTime=0.025},
-        [110355011987939]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.012,triggerTime=0.012},
-        [139369275981139]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022},
-        [118907603246885]={type="lungehold",length=0.83,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
-        [78432063483146]={type="attack",length=1.72,speed=1.00,triggerProgress=0.018,triggerTime=0.025},
-        [122812055447896]={type="lungehold",length=0.75,speed=1.00,triggerProgress=0.010,triggerTime=0.008},
-        [78935059863801]={type="attack",length=1.63,speed=1.00,triggerProgress=0.016,triggerTime=0.022},
-        [129784271201071]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.015,triggerTime=0.015},
-        [132817836308238]={type="attack",length=1.72,speed=1.00,triggerProgress=0.017,triggerTime=0.025},
-        [105374834496520]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
-        [111920872708571]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022},
+        -- Standard & Lunge Attacks
+        [113255068724446]={type="lungehold",length=1.00,speed=1.00},
+        [74968262036854]={type="attack",length=1.70,speed=1.00},
+        [135002183282873]={type="lungehold",length=1.50,speed=1.00},
+        [121216847022485]={type="attack",length=1.75,speed=1.00},
+        [117042998468241]={type="lungehold",length=1.00,speed=1.00},
+        [133963973694098]={type="attack",length=1.72,speed=1.00},
+        [110355011987939]={type="lungehold",length=1.00,speed=1.00},
+        [139369275981139]={type="attack",length=1.72,speed=1.00},
+        [118907603246885]={type="lungehold",length=0.83,speed=1.00},
+        [78432063483146]={type="attack",length=1.72,speed=1.00},
+        [122812055447896]={type="lungehold",length=0.75,speed=1.00},
+        [78935059863801]={type="attack",length=1.63,speed=1.00},
+        [129784271201071]={type="lungehold",length=1.00,speed=1.00},
+        [132817836308238]={type="attack",length=1.72,speed=1.00},
+        [105374834496520]={type="lungehold",length=1.00,speed=1.00},
+        [111920872708571]={type="attack",length=1.72,speed=1.00},
 
-        -- The Hidden Pounce Skill (Instant Trigger & Velocity Prediction)
-        [98163597193511]={type="hidden_pounce",killer="the hidden",dashSpeed=35,maxRange=32},
-        [123809268724645]={type="hidden_pounce",killer="the hidden",dashSpeed=35,maxRange=32},
+        -- The Hidden Pounce Skill (14 studs in 1.1s)
+        [98163597193511]={type="hidden_pounce",killer="the hidden",dashSpeed=14,maxRange=14},
+        [123809268724645]={type="hidden_pounce",killer="the hidden",dashSpeed=14,maxRange=14},
 
-        -- The Masked Chainsaw Rush (Danger Zone & Fast Hitbox Detection)
+        -- The Masked Chainsaw Rush
         [117070354890871]={type="masked_chainsaw",killer="the masked",dangerRadius=14},
         [106871536134254]={type="masked_chainsaw",killer="the masked",dangerRadius=14},
         [109402730355822]={type="masked_chainsaw",killer="the masked",dangerRadius=14}
@@ -138,12 +138,12 @@ do
     local function doParry(force,killerChar,distance,customRange)
         if not STATE.autoParryEnabled then return false end
         local now=tick()
-        if now-STATE.lastParryTime<0.01 then return false end
+        if now-STATE.lastParryTime<0.005 then return false end
         if killerChar and distance then
             local allowedRange=customRange or STATE.autoParryRadius
             local allowVault=false
             local data=STATE.activeAttackers[killerChar] or STATE.activeSpecialAttackers[killerChar]
-            if data and data.profile and data.profile.type=="lungehold" then
+            if data and data.profile and (data.profile.type=="lungehold" or data.profile.type=="hidden_pounce") then
                 allowVault=true
             end
             if distance>allowedRange then return false end
@@ -185,15 +185,6 @@ do
         return true
     end
 
-    local function executeSpecialParry()
-        if not STATE.autoParryEnabled then return false end
-        local now=tick()
-        if now-STATE.lastParryTime<0.005 then return false end
-        STATE.lastParryTime=now
-        sendParryInput()
-        return true
-    end
-
     local function OnParryCharacterAdded(player,char)
         if player==localPlayer then return end
         task.wait(0.5)
@@ -224,18 +215,46 @@ do
                     local currentKName=getKillerName(player,char) or profile.killer or kName
                     if isIgnored(profile, currentKName) then return end
 
-                    local data={name=currentKName,track=track,type=profile.type,id=numId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1}
+                    local data={name=currentKName,track=track,type=profile.type,id=numId,profile=profile,started=tick(),consumed=false}
 
                     if profile.type=="hidden_pounce" or profile.type=="masked_chainsaw" then
                         STATE.activeSpecialAttackers[char]=data
+                        
+                        -- Instant Parry ทันทีสำหรับ The Hidden หากอยู่ในระยะ 14-16 studs
+                        if profile.type=="hidden_pounce" then
+                            local killerRoot=char:FindFirstChild("HumanoidRootPart")
+                            local localChar=localPlayer.Character
+                            local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+                            if killerRoot and localRoot then
+                                local dist=(localRoot.Position-killerRoot.Position).Magnitude
+                                local maxCheck=profile.maxRange or 14
+                                if dist<=maxCheck+2 then
+                                    if doParry(true,char,dist,maxCheck+2) then
+                                        data.consumed=true
+                                    end
+                                end
+                            end
+                        end
                     else
                         STATE.activeAttackers[char]=data
+                        
+                        local killerRoot=char:FindFirstChild("HumanoidRootPart")
+                        local localChar=localPlayer.Character
+                        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+                        if killerRoot and localRoot then
+                            local dist=(localRoot.Position-killerRoot.Position).Magnitude
+                            if dist<=STATE.autoParryRadius then
+                                if doParry(true,char,dist) then
+                                    data.consumed=true
+                                end
+                            end
+                        end
                     end
 
                     local conn
                     conn=track.Stopped:Connect(function()
                         if conn then conn:Disconnect() end
-                        task.delay(0.15,function()
+                        task.delay(0.1,function()
                             if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then
                                 STATE.activeAttackers[char]=nil
                             end
@@ -299,7 +318,7 @@ do
                         if timeToImpact<=EMERGENCY_TIME or predictedDistance<=3.75 then shouldEmergency=true end
                     end
                     if shouldEmergency then
-                        local data=STATE.activeAttackers[killerChar]
+                        local data=STATE.activeAttackers[killerChar] or STATE.activeSpecialAttackers[killerChar]
                         if data and not data.consumed then
                             if doParry(true,killerChar,distance) then data.consumed=true end
                         end
@@ -310,7 +329,7 @@ do
     end)
 
     RegisterTask("AttackersMonitor",0,function()
-        if not STATE.autoParryEnabled then return end
+      if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
         for killerChar,data in pairs(STATE.activeAttackers) do
             if not killerChar or not killerChar.Parent or not data.track then
@@ -326,63 +345,10 @@ do
                     local localChar=localPlayer.Character
                     local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
                     if killerRoot and localRoot and profile then
-                        local offset=localRoot.Position-killerRoot.Position
-                        local distance=offset.Magnitude
-                        local maxRadius=STATE.autoParryRadius
-                        local velocity=killerRoot.AssemblyLinearVelocity
-                        local localVelocity=localRoot.AssemblyLinearVelocity
-                        local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
-                        local flatLocalVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
-                        local flatOffset=Vector3.new(offset.X,0,offset.Z)
-                        local closingSpeed=0
-                        if flatOffset.Magnitude>0 then
-                            closingSpeed=Vector3.new(flatVelocity.X-flatLocalVelocity.X,0,flatVelocity.Z-flatLocalVelocity.Z):Dot(flatOffset.Unit)
-                        end
-                        local emergency=false
-                        if distance<=HARD_CLOSE_RANGE then
-                            emergency=true
-                        elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
-                            local timeToImpact=distance/closingSpeed
-                            if timeToImpact<=EMERGENCY_TIME then emergency=true end
-                        end
-                        if emergency then
-                            if doParry(true,killerChar,distance,maxRadius) then data.consumed=true end
-                        else
-                            local position=data.track.TimePosition or 0
-                            local realLength=data.track.Length
-                            local length=(realLength and realLength>0) and realLength or profile.length
-                            local speed=profile.speed
-                            local normalizedTime=position*speed
-                            local normalizedLength=length/speed
-                            local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
-                            local triggerTime=profile.triggerTime/profile.speed
-                            local triggerProgress=profile.triggerProgress
-                            local animationReady=position>=triggerTime or progress>=triggerProgress
-                            local lungeReady=false
-                            local critical=false
-                            if profile.type=="lungehold" then
-                                local attackReach=3.5
-                                local impactDistance=math.max(distance-attackReach,0)
-                                local timeToImpact=math.huge
-                                if closingSpeed>0 then timeToImpact=impactDistance/closingSpeed end
-                                lungeReady=closingSpeed>=6 and timeToImpact<=0.32
-                                critical=closingSpeed>=4 and timeToImpact<=0.16
-                            end
-                            if animationReady or lungeReady or critical then
-                                if distance<=maxRadius then
-                                    local movingCorrectly=true
-                                    if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
-                                        movingCorrectly=flatVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
-                                    end
-                                    if movingCorrectly then
-                                        local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-                                        local predictedPos=killerRoot.Position+(flatVelocity*ping)
-                                        local predictedDistance=(localRoot.Position-predictedPos).Magnitude
-                                        if predictedDistance<=maxRadius+2 then
-                                            if doParry(false,killerChar,distance,maxRadius) then data.consumed=true end
-                                        end
-                                    end
-                                end
+                        local distance=(localRoot.Position-killerRoot.Position).Magnitude
+                        if distance<=STATE.autoParryRadius then
+                            if doParry(true,killerChar,distance) then
+                                data.consumed=true
                             end
                         end
                     end
@@ -391,8 +357,7 @@ do
         end
     end)
 
-    -- การประมวลผลความเร็วสูง (Frame-Perfect Instant Parry) สำหรับ The Hidden & The Mask
-   RunService.Heartbeat:Connect(function()
+    RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then return end
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
@@ -413,20 +378,26 @@ do
                         local dist=(localPos-killerPos).Magnitude
 
                         if profile.type=="hidden_pounce" then
-                            -- คำนวณความเร็วการพุ่งและชดเชย Ping ล่วงหน้า
-                            local vel=killerRoot.AssemblyLinearVelocity
-                            local closingVel=(vel.Magnitude > 5) and vel or (killerRoot.CFrame.LookVector * profile.dashSpeed)
-                            local predictedPos=killerPos + (closingVel * (ping + 0.08))
-                            local predictedDist=(localPos - predictedPos).Magnitude
-
-                            if dist <= profile.maxRange and predictedDist <= (STATE.autoParryRadius + 4) then
-                                if executeSpecialParry() then
+                            local maxRange=profile.maxRange or 14
+                            -- หากอยู่ในระยะ 14-16 studs Parry ทันที
+                            if dist<=maxRange+2 then
+                                if doParry(true,killerChar,dist,maxRange+2) then
                                     data.consumed=true
+                                end
+                            else
+                                local vel=killerRoot.AssemblyLinearVelocity
+                                local closingVel=(vel.Magnitude > 5) and vel or (killerRoot.CFrame.LookVector * (profile.dashSpeed or 14))
+                                local predictedPos=killerPos + (closingVel * (ping + 0.05))
+                                local predictedDist=(localPos - predictedPos).Magnitude
+
+                                if predictedDist <= maxRange then
+                                    if doParry(true,killerChar,dist,maxRange+2) then
+                                        data.consumed=true
+                                    end
                                 end
                             end
 
                         elseif profile.type=="masked_chainsaw" then
-                            -- เช็คความเร็วเลื่อยพุ่งใส่ + ป้องกัน Hitbox เลื่อยในระยะอันตราย
                             local vel=killerRoot.AssemblyLinearVelocity
                             local relVel=vel - localRoot.AssemblyLinearVelocity
                             local dir=(localPos - killerPos).Unit
@@ -435,7 +406,7 @@ do
 
                             if dist <= dangerThreshold then
                                 if closingSpeed > 1 or dist <= 7 then
-                                    if executeSpecialParry() then
+                                    if doParry(true,killerChar,dist,dangerThreshold) then
                                         data.consumed=true
                                     end
                                 end
@@ -612,4 +583,4 @@ local function BuildUI()
     })
 end
 BuildUI()
-print("BOLONGHUB LITE LOADED!")
+print("BOLONGHUB INSTANT POUNCE LOADED!")
