@@ -12,7 +12,7 @@ local ACCENT_COLOR=Color3.fromRGB(255,255,255)
 local function Notify(title,content,delay)
     Chloex:MakeNotify({Title=title or "BOLONG-HUB",Description="Info",Content=content or "",Color=ACCENT_COLOR,Time=0.4,Delay=delay or 2})
 end
-local STATE={autoParryEnabled=false,autoParryRadiusEsp=false,autoParryRadius=10,aimStrictness=0.1,ignoredTheHidden=false,ignoredTheAbysswalker=false,ignoredTheMaskedDuck=false,lastParryTime=0,activeAttackers={},activeSkillAttackers={}}
+local STATE={autoParryEnabled=false,autoParryRadiusEsp=false,autoParryRadius=10,aimStrictness=0.1,ignoredTheHidden=false,ignoredTheAbysswalker=false,ignoredTheMaskedDuck=false,lastParryTime=0,activeAttackers={},activeSkillAttackers={},killerCharacters={}}
 local MasterTasks={}
 local function RegisterTask(name,interval,fn)
     MasterTasks[#MasterTasks+1]={name=name,interval=interval,timer=0,fn=fn}
@@ -21,6 +21,10 @@ local toggleAutoParryESP
 do
     local SKILL_ANIM_ID=98163597193511
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
+    local CLOSE_RANGE=4.5
+    local HARD_CLOSE_RANGE=2.75
+    local MIN_CLOSING_SPEED=2
+    local EMERGENCY_TIME=0.18
     local ATTACK_PROFILES={
         [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
         [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
@@ -52,9 +56,7 @@ do
         local ok,values=pcall(function() return char:WaitForChild("Values",2) end)
         if ok and values then
             local killerNameVal=values:FindFirstChild("KillerName")
-            if killerNameVal and killerNameVal:IsA("StringValue") then
-                return killerNameVal.Value
-            end
+            if killerNameVal and killerNameVal:IsA("StringValue") then return killerNameVal.Value end
         end
         local attr=player:GetAttribute("SelectedKiller")
         if attr then return attr end
@@ -69,9 +71,7 @@ do
         if btn and btn:IsA("ImageButton") then
             firesignal(btn.MouseButton1Down)
             task.defer(function()
-                if btn and btn.Parent then
-                    firesignal(btn.MouseButton1Up)
-                end
+                if btn and btn.Parent then firesignal(btn.MouseButton1Up) end
             end)
         else
             local ok,fakeInput=pcall(function()
@@ -81,9 +81,7 @@ do
                 return obj
             end)
             if ok and fakeInput then
-                for _,conn in getconnections(UserInputService.InputBegan) do
-                    conn:Fire(fakeInput,false)
-                end
+                for _,conn in getconnections(UserInputService.InputBegan) do conn:Fire(fakeInput,false) end
             else
                 VirtualInputManager:SendMouseButtonEvent(0,0,1,true,game,0)
             end
@@ -91,21 +89,22 @@ do
         local root=char:FindFirstChild("HumanoidRootPart")
         if root then
             pcall(function()
-                if CollectionService:HasTag(root,"doing action") then
-                    CollectionService:RemoveTag(root,"doing action")
-                end
+                if CollectionService:HasTag(root,"doing action") then CollectionService:RemoveTag(root,"doing action") end
             end)
         end
     end
-    local function doParry()
-        if not STATE.autoParryEnabled then return end
-        if tick()-STATE.lastParryTime<0.025 then return end
-        STATE.lastParryTime=tick()
+    local function doParry(force)
+        if not STATE.autoParryEnabled then return false end
+        local now=tick()
+        if now-STATE.lastParryTime<0.01 then return false end
+        STATE.lastParryTime=now
         sendParryInput()
+        return true
     end
     local function doSkillParry()
-        if not STATE.autoParryEnabled then return end
+        if not STATE.autoParryEnabled then return false end
         sendParryInput()
+        return true
     end
     local function isIgnoredSkillKiller(killerName)
         if typeof(killerName)~="string" then return false end
@@ -142,9 +141,7 @@ do
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.defer(function()
-                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
-                    STATE.activeSkillAttackers[char]=nil
-                end
+                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then STATE.activeSkillAttackers[char]=nil end
             end)
         end)
         trySkillParry(char,data)
@@ -156,6 +153,10 @@ do
         local killerName=getKillerName(player,char)
         if killerName or (player.Team and player.Team.Name:lower():find("killer")) then
             local kName=killerName or "Unknown Killer"
+            STATE.killerCharacters[char]={player=player,name=kName}
+            char.AncestryChanged:Connect(function(_,parent)
+                if not parent then STATE.killerCharacters[char]=nil end
+            end)
             local humanoid=char:WaitForChild("Humanoid",3)
             if humanoid then
                 local animator=humanoid:WaitForChild("Animator",3)
@@ -171,24 +172,13 @@ do
                         local profile=VALID_ANIM_IDS[animId]
                         if not profile then return end
                         local numericId=tonumber(animId:match("%d+"))
-                        local data={
-                            name=kName,
-                            track=track,
-                            type=profile.type,
-                            id=numericId,
-                            profile=profile,
-                            started=tick(),
-                            consumed=false,
-                            lastTimePosition=-1
-                        }
+                        local data={name=kName,track=track,type=profile.type,id=numericId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1}
                         STATE.activeAttackers[char]=data
                         local conn
                         conn=track.Stopped:Connect(function()
                             if conn then conn:Disconnect() end
                             task.delay(0.15,function()
-                                if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then
-                                    STATE.activeAttackers[char]=nil
-                                end
+                                if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then STATE.activeAttackers[char]=nil end
                             end)
                         end)
                     end)
@@ -198,9 +188,7 @@ do
     end
     local function OnParryPlayerAdded(player)
         if player==localPlayer then return end
-        if player.Character then
-            task.spawn(function() OnParryCharacterAdded(player,player.Character) end)
-        end
+        if player.Character then task.spawn(function() OnParryCharacterAdded(player,player.Character) end) end
         player.CharacterAdded:Connect(function(char)
             task.spawn(function() OnParryCharacterAdded(player,char) end)
         end)
@@ -209,6 +197,17 @@ do
         if player~=localPlayer then OnParryPlayerAdded(player) end
     end
     Players.PlayerAdded:Connect(OnParryPlayerAdded)
+    RegisterTask("CloseRangeMonitor",0,function()
+        if not STATE.autoParryEnabled then return end
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot then return end
+        for killerChar,killerData in pairs(STATE.killerCharacters) do
+            if not killerChar or not killerChar.Parent then
+                STATE.killerCharacters[killerChar]=nil
+            end
+        end
+    end)
     RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
@@ -223,33 +222,48 @@ do
                 local localChar=localPlayer.Character
                 local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
                 if killerRoot and localRoot and profile then
-                    local position=data.track.TimePosition or 0
-                    local realLength=data.track.Length
-                    local length=(realLength and realLength>0) and realLength or profile.length
-                    local speed=data.track.Speed
-                    if not speed or speed<=0 then speed=profile.speed end
-                    local normalizedTime=position*speed
-                    local normalizedLength=length/speed
-                    local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
-                    local triggerTime=profile.triggerTime/profile.speed
-                    local triggerProgress=profile.triggerProgress
-                    if position>=triggerTime or progress>=triggerProgress then
-                        local distance=(localRoot.Position-killerRoot.Position).Magnitude
-                        if distance<=STATE.autoParryRadius then
-                            local velocity=killerRoot.AssemblyLinearVelocity
-                            local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
-                            local direction=localRoot.Position-killerRoot.Position
-                            local movingCorrectly=true
-                            if direction.Magnitude>0 and flatVelocity.Magnitude>8 then
-                                movingCorrectly=flatVelocity.Unit:Dot(direction.Unit)>=-0.1
-                            end
-                            if movingCorrectly then
-                                local ping=math.clamp(Players.LocalPlayer:GetNetworkPing(),0,0.3)
-                                local predictedPos=killerRoot.Position+(flatVelocity*ping)
-                                local predictedDistance=(localRoot.Position-predictedPos).Magnitude
-                                if predictedDistance<=STATE.autoParryRadius+2 then
-                                    doParry()
-                                    data.consumed=true
+                    local offset=localRoot.Position-killerRoot.Position
+                    local distance=offset.Magnitude
+                    local velocity=killerRoot.AssemblyLinearVelocity
+                    local localVelocity=localRoot.AssemblyLinearVelocity
+                    local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
+                    local flatLocalVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
+                    local flatOffset=Vector3.new(offset.X,0,offset.Z)
+                    local closingSpeed=0
+                    if flatOffset.Magnitude>0 then
+                        closingSpeed=Vector3.new(flatVelocity.X-flatLocalVelocity.X,0,flatVelocity.Z-flatLocalVelocity.Z):Dot(flatOffset.Unit)
+                    end
+                    local emergency=false
+                    if distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
+                        local timeToImpact=distance/closingSpeed
+                        if timeToImpact<=EMERGENCY_TIME then emergency=true end
+                    end
+                    if distance<=HARD_CLOSE_RANGE then emergency=true end
+                    if emergency then
+                        if doParry(true) then data.consumed=true end
+                    else
+                        local position=data.track.TimePosition or 0
+                        local realLength=data.track.Length
+                        local length=(realLength and realLength>0) and realLength or profile.length
+                        local speed=profile.speed
+                        local normalizedTime=position*speed
+                        local normalizedLength=length/speed
+                        local progress=normalizedLength>0 and normalizedTime/normalizedLength or 0
+                        local triggerTime=profile.triggerTime/profile.speed
+                        local triggerProgress=profile.triggerProgress
+                        if position>=triggerTime or progress>=triggerProgress then
+                            if distance<=STATE.autoParryRadius then
+                                local movingCorrectly=true
+                                if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
+                                    movingCorrectly=flatVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
+                                end
+                                if movingCorrectly then
+                                    local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+                                    local predictedPos=killerRoot.Position+(flatVelocity*ping)
+                                    local predictedDistance=(localRoot.Position-predictedPos).Magnitude
+                                    if predictedDistance<=STATE.autoParryRadius+2 then
+                                        if doParry(false) then data.consumed=true end
+                                    end
                                 end
                             end
                         end
@@ -314,17 +328,15 @@ do
     end
     function toggleAutoParryESP(state)
         if state then
+            if espLoop then espLoop:Disconnect() end
             buildRing()
             espLoop=RunService.RenderStepped:Connect(function()
                 if not localPlayer.Character then return end
                 local root=localPlayer.Character:FindFirstChild("HumanoidRootPart")
                 if not root then return end
                 local radius=STATE.autoParryRadius
-                if radius~=lastRadius then
-                    updateSegmentSizes(radius)
-                    lastRadius=radius
-                end
-                local center=root.Position-Vector3.new(0,root.Size.Y/2+0.6,0)
+                if radius~=lastRadius then updateSegmentSizes(radius);lastRadius=radius end
+                local center=root.Position+Vector3.new(0,-root.Size.Y/2+0.2,0)
                 for i,seg in ipairs(espRing) do
                     if seg and seg.Parent then
                         local c=espCache[i]
