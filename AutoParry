@@ -9,6 +9,7 @@ local PlayerGui=localPlayer:WaitForChild("PlayerGui")
 local Chloex=loadstring(game:HttpGet("https://raw.githubusercontent.com/RillBoys/bolong.catui/refs/heads/main/b0lngUi.lua"))()
 local VERSION="v4.2.0 Lite"
 local ACCENT_COLOR=Color3.fromRGB(255,255,255)
+local ABYSSWALKER_ANIM_ID=80411309607666
 local function Notify(title,content,delay)
     Chloex:MakeNotify({Title=title or "BOLONG-HUB",Description="Info",Content=content or "",Color=ACCENT_COLOR,Time=0.4,Delay=delay or 2})
 end
@@ -20,13 +21,12 @@ end
 local toggleAutoParryESP
 do
     local SKILL_ANIM_ID=98163597193511
-    local ABYSSWALKER_ANIM_ID=80411309607666
-    local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
     local ABYSSWALKER_ANIM="rbxassetid://"..ABYSSWALKER_ANIM_ID
+    local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
     local HIDDEN_RANGE=30
     local HIDDEN_SPEED=13.8
     local HIDDEN_PREDICT_TIME=0.08
-    local ABYSSWALKER_RANGE=10
+    local ABYSSWALKER_RANGE=12.5
     local MASKED_EXTRA_ANIMS={
         ["rbxassetid://117070354890871"]={type="lungehold",length=2.00,speed=1.00},
         ["rbxassetid://106871536134254"]={type="attack",length=3.00,speed=1.00},
@@ -263,6 +263,26 @@ do
         end)
         tryHiddenParry(char,data)
     end
+    local function registerAbysswalkerAttack(char,kName,track)
+        if STATE.ignoredTheAbysswalker then return end
+        local data={name=kName,track=track,type="abysswalker",started=tick(),consumed=false,skillId=ABYSSWALKER_ANIM_ID}
+        STATE.activeSkillAttackers[char]=data
+        local conn
+        conn=track.Stopped:Connect(function()
+            if conn then conn:Disconnect() end
+            task.defer(function()
+                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
+                    STATE.activeSkillAttackers[char]=nil
+                end
+            end)
+        end)
+        local distance=getSkillDistance(char)
+        if distance<=ABYSSWALKER_RANGE then
+            if doSkillParry() then
+                data.consumed=true
+            end
+        end
+    end
     local function registerMaskedFastAttack(char,kName,track,profile,animId)
         if not isMaskedKiller(kName) then return end
         if STATE.ignoredTheMaskedDuck then return end
@@ -311,18 +331,7 @@ do
                             return
                         end
                         if animId==ABYSSWALKER_ANIM then
-                            if STATE.ignoredTheAbysswalker then return end
-                            local data={name=kName,track=track,type="abysswalker",started=tick(),consumed=false,skillId=ABYSSWALKER_ANIM_ID}
-                            STATE.activeSkillAttackers[char]=data
-                            local conn
-                            conn=track.Stopped:Connect(function()
-                                if conn then conn:Disconnect() end
-                                task.defer(function()
-                                    if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
-                                        STATE.activeSkillAttackers[char]=nil
-                                    end
-                                end)
-                            end)
+                            registerAbysswalkerAttack(char,kName,track)
                             return
                         end
                         local maskedProfile=MASKED_EXTRA_ANIMS[animId]
