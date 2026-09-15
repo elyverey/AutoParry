@@ -398,7 +398,7 @@ do
                     if isMaskedKiller(kName) then
                         if numericId==MASKED_LUNGEHOLD_ID or numericId==MASKED_WALK_ID or numericId==MASKED_ATTACK_ID or numericId==MASKED_ATTACKDONE_ID or MASKED_SPECIAL_IDS[numericId] then
                             local profile=MASKED_EXTRA_ANIMS[animId] or {type="maskedfast",length=1,speed=1}
-                            registerMaskedFastAttack(char,kName,track,profile,numericId)
+                    registerMaskedFastAttack(char,kName,track,profile,numericId)
                             return
                         end
                         return
@@ -474,7 +474,7 @@ do
             end
         end
     end)
-   RegisterTask("AttackersMonitor",0,function()
+    RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
         for killerChar,data in pairs(STATE.activeAttackers) do
@@ -607,7 +607,7 @@ do
                 if killerRoot then
                     local killerPos=killerRoot.Position
                     local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
-.                   local distance=flatOffset.Magnitude
+                    local distance=flatOffset.Magnitude
                     if data.type=="maskedspecial" then
                         if distance<=MASKED_SPECIAL_RANGE then
                             if doSkillParry() then data.consumed=true end
@@ -713,7 +713,7 @@ do
             end
         end
     end)
-    local espRing={}
+   local espRing={}
     local espLoop=nil
     local espCache={}
     local SEGMENTS=32
