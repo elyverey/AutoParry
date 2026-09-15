@@ -39,9 +39,9 @@ do
     }
     local MASKED_EXTRA_ANIMS={
         ["rbxassetid://117070354890871"]={type="masked_lungehold",length=2.00,speed=1.00},
-        ["rbxassetid://111229698330816"]={type="maskedwalk",length=1.00,speed=1.00},
+        ["rbxassetid://111229698330816"]={type="maskedwalk",length=0.87,speed=1.00},
         ["rbxassetid://106871536134254"]={type="maskedattack",length=3.00,speed=1.00},
-        ["rbxassetid://109402730355822"]={type="maskedspecial",length=2.95,speed=1.00},
+        ["rbxassetid://109402730355822"]={type="maskedattackdone",length=2.95,speed=1.00},
         ["rbxassetid://110360975271091"]={type="maskedspecial",length=4.00,speed=1.00}
     }
     local CLOSE_RANGE=4.5
@@ -318,10 +318,32 @@ do
         local isAttack=numericId==MASKED_ATTACK_ID
         local isAttackDone=numericId==MASKED_ATTACKDONE_ID
         local isSpecial=MASKED_SPECIAL_IDS[numericId]==true
+        if isLungeHold then
+            local now=tick()
+            STATE.maskedLungeArmed[char]={
+                armedAt=now,
+                expires=now+5,
+                lungeTrack=track,
+                walkTrack=nil,
+                consumed=false
+            }
+            return
+        end
+        if isWalk then
+            local armed=STATE.maskedLungeArmed[char]
+            if armed and not armed.consumed and tick()<=armed.expires then
+                armed.walkTrack=track
+                armed.walkStarted=tick()
+            end
+            return
+        end
+        if isAttack or isAttackDone then
+            return
+        end
         local data={
             name=kName,
             track=track,
-            type=isLungeHold and "masked_lungehold" or (isWalk and "maskedwalk" or (isAttack and "maskedattack" or (isAttackDone and "maskedattackdone" or (isSpecial and "maskedspecial" or "maskedfast")))),
+            type=isSpecial and "maskedspecial" or "maskedfast",
             started=tick(),
             consumed=false,
             id=numericId,
@@ -335,12 +357,6 @@ do
                 if STATE.activeMaskedSkillAttackers[char] and STATE.activeMaskedSkillAttackers[char].track==track then STATE.activeMaskedSkillAttackers[char]=nil end
             end)
         end)
-        if isLungeHold then
-            STATE.maskedLungeArmed[char]={armedAt=tick(),expires=tick()+5,track=track}
-            return
-        end
-        if isWalk then return end
-        if isAttack or isAttackDone then return end
         if isSpecial then
             local distance=getSkillDistance(char)
             if distance<=MASKED_SPECIAL_RANGE then
@@ -354,70 +370,68 @@ do
         end
     end
     local function OnParryCharacterAdded(player,char)
-        if player==localPlayer then return end
-        task.wait(0.5)
-        if not char.Parent then return end
+        if not player or not char then return end
         local killerName=getKillerName(player,char)
-        if killerName or (player.Team and player.Team.Name:lower():find("killer")) then
-            local kName=killerName or "Unknown Killer"
-            STATE.killerCharacters[char]={player=player,name=kName}
-            char.AncestryChanged:Connect(function(_,parent)
-                if not parent then
-                    STATE.killerCharacters[char]=nil
-                    STATE.activeAttackers[char]=nil
-                    STATE.activeSkillAttackers[char]=nil
-                    STATE.activeMaskedSkillAttackers[char]=nil
-                    STATE.maskedLungeArmed[char]=nil
-                end
-            end)
-            local humanoid=char:WaitForChild("Humanoid",3)
-            if humanoid then
-                local animator=humanoid:WaitForChild("Animator",3)
-                if animator then
-                    animator.AnimationPlayed:Connect(function(track)
-                        if not STATE.autoParryEnabled then return end
-                        if not track or not track.Animation then return end
-                        local animId=track.Animation.AnimationId
-                        local numericId=getAnimNumericId(animId)
-                        if numericId==SKILL_ANIM_ID and kName:lower()=="the hidden" then
-                            registerSkillAttack(char,kName,track)
+        local isLocalMasked=player==localPlayer and isMaskedKiller(killerName)
+        if player==localPlayer and not isLocalMasked then return end
+        if player~=localPlayer and not (killerName or (player.Team and player.Team.Name:lower():find("killer"))) then return end
+        local kName=killerName or "Unknown Killer"
+        STATE.killerCharacters[char]={player=player,name=kName}
+        char.AncestryChanged:Connect(function(_,parent)
+            if not parent then
+                STATE.killerCharacters[char]=nil
+                STATE.activeAttackers[char]=nil
+                STATE.activeSkillAttackers[char]=nil
+                STATE.activeMaskedSkillAttackers[char]=nil
+                STATE.maskedLungeArmed[char]=nil
+            end
+        end)
+        local humanoid=char:WaitForChild("Humanoid",3)
+        if humanoid then
+            local animator=humanoid:WaitForChild("Animator",3)
+            if animator then
+                animator.AnimationPlayed:Connect(function(track)
+                    if not STATE.autoParryEnabled then return end
+                    if not track or not track.Animation then return end
+                    local animId=track.Animation.AnimationId
+                    local numericId=getAnimNumericId(animId)
+                    if isMaskedKiller(kName) then
+                        if numericId==MASKED_LUNGEHOLD_ID or numericId==MASKED_WALK_ID or numericId==MASKED_ATTACK_ID or numericId==MASKED_ATTACKDONE_ID or MASKED_SPECIAL_IDS[numericId] then
+                            local profile=MASKED_EXTRA_ANIMS[animId] or {type="maskedfast",length=1,speed=1}
+                            registerMaskedFastAttack(char,kName,track,profile,numericId)
                             return
                         end
-                        if numericId==ABYSSWALKER_ANIM_ID then
-                            registerAbysswalkerAttack(char,kName,track)
-                            return
-                        end
-                        if isMaskedKiller(kName) then
-                            if numericId==MASKED_LUNGEHOLD_ID or numericId==MASKED_WALK_ID or numericId==MASKED_ATTACK_ID or numericId==MASKED_ATTACKDONE_ID or MASKED_SPECIAL_IDS[numericId] then
-                                local profile=MASKED_EXTRA_ANIMS[animId] or {type="maskedfast",length=1,speed=1}
-                                registerMaskedFastAttack(char,kName,track,profile,numericId)
-                                return
-                            end
-                            return
-                        end
-                        local profile=VALID_ANIM_IDS[animId]
-                        if not profile then return end
-                        local data={name=kName,track=track,type=profile.type,id=numericId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1}
-                        STATE.activeAttackers[char]=data
-                        local conn
-                        conn=track.Stopped:Connect(function()
-                            if conn then conn:Disconnect() end
-                            task.delay(0.15,function()
-                                if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then STATE.activeAttackers[char]=nil end
-                            end)
+                        return
+                    end
+                    if numericId==SKILL_ANIM_ID and kName:lower()=="the hidden" then
+                        registerSkillAttack(char,kName,track)
+                        return
+                    end
+                    if numericId==ABYSSWALKER_ANIM_ID then
+                        registerAbysswalkerAttack(char,kName,track)
+                        return
+                    end
+                    local profile=VALID_ANIM_IDS[animId]
+                    if not profile then return end
+                    local data={name=kName,track=track,type=profile.type,id=numericId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1}
+                    STATE.activeAttackers[char]=data
+                    local conn
+                    conn=track.Stopped:Connect(function()
+                        if conn then conn:Disconnect() end
+                        task.delay(0.15,function()
+                            if STATE.activeAttackers[char] and STATE.activeAttackers[char].track==track then STATE.activeAttackers[char]=nil end
                         end)
                     end)
-                end
+                end)
             end
         end
     end
     local function OnParryPlayerAdded(player)
-        if player==localPlayer then return end
         if player.Character then task.spawn(function() OnParryCharacterAdded(player,player.Character) end) end
         player.CharacterAdded:Connect(function(char) task.spawn(function() OnParryCharacterAdded(player,char) end) end)
     end
     for _,player in ipairs(Players:GetPlayers()) do
-        if player~=localPlayer then OnParryPlayerAdded(player) end
+        OnParryPlayerAdded(player)
     end
     Players.PlayerAdded:Connect(OnParryPlayerAdded)
     RegisterTask("CloseRangeMonitor",0,function()
@@ -428,7 +442,7 @@ do
         for killerChar,killerData in pairs(STATE.killerCharacters) do
             if not killerChar or not killerChar.Parent then
                 STATE.killerCharacters[killerChar]=nil
-            else
+            elseif killerChar~=localChar then
                 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                 if killerRoot then
                     local offset=localRoot.Position-killerRoot.Position
@@ -460,7 +474,7 @@ do
             end
         end
     end)
-    RegisterTask("AttackersMonitor",0,function()
+   RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
         for killerChar,data in pairs(STATE.activeAttackers) do
@@ -593,31 +607,12 @@ do
                 if killerRoot then
                     local killerPos=killerRoot.Position
                     local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
-                    local distance=flatOffset.Magnitude
-                    if data.type=="masked_lungehold" then
-                        local armed=STATE.maskedLungeArmed[killerChar]
-                        if not armed or tick()>armed.expires then
-                            STATE.maskedLungeArmed[killerChar]=nil
-                        end
-                    elseif data.type=="maskedwalk" then
-                        local armed=STATE.maskedLungeArmed[killerChar]
-                        if armed and tick()<=armed.expires then
-                            if distance<=MASKED_RANGE then
-                                if doSkillParry() then
-                                    data.consumed=true
-                                    STATE.maskedLungeArmed[killerChar]=nil
-                                end
-                            end
-                        end
-                    elseif data.type=="maskedattack" then
-                        -- AttackAlex เกิดหลังจาก WalkAnim ถึงตัวแล้ว ไม่ต้องรอ ID นี้
-                    elseif data.type=="maskedattackdone" then
-                        -- AttackAlexDone เป็นเพียงช่วงจบของการโจมตี
-                    elseif data.type=="maskedspecial" then
+.                   local distance=flatOffset.Magnitude
+                    if data.type=="maskedspecial" then
                         if distance<=MASKED_SPECIAL_RANGE then
                             if doSkillParry() then data.consumed=true end
                         end
-                    else
+                    elseif data.type=="maskedfast" then
                         if distance<=MASKED_RANGE then
                             if doSkillParry() then data.consumed=true end
                         end
@@ -626,8 +621,42 @@ do
             end
         end
         for killerChar,armed in pairs(STATE.maskedLungeArmed) do
-            if not killerChar or not killerChar.Parent or not armed or tick()>armed.expires then
+            if not killerChar or not killerChar.Parent or not armed then
                 STATE.maskedLungeArmed[killerChar]=nil
+            elseif tick()>armed.expires then
+                STATE.maskedLungeArmed[killerChar]=nil
+            else
+                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+                if killerRoot then
+                    local walkTrack=armed.walkTrack
+                    if not walkTrack or not walkTrack.Parent or not walkTrack.IsPlaying then
+                        local humanoid=killerChar:FindFirstChildOfClass("Humanoid")
+                        local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
+                        if animator then
+                            local tracks=animator:GetPlayingAnimationTracks()
+                            for _,track in ipairs(tracks) do
+                                if track and track.IsPlaying and track.Animation then
+                                    local id=getAnimNumericId(track.Animation.AnimationId)
+                                    if id==MASKED_WALK_ID then
+                                        walkTrack=track
+                                        armed.walkTrack=track
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    if walkTrack and walkTrack.IsPlaying and not armed.consumed then
+                        local killerPos=killerRoot.Position
+                        local distance=(Vector3.new(localPos.X,0,localPos.Z)-Vector3.new(killerPos.X,0,killerPos.Z)).Magnitude
+                        if distance<=MASKED_RANGE then
+                            if doSkillParry() then
+                                armed.consumed=true
+                                STATE.maskedLungeArmed[killerChar]=nil
+                            end
+                        end
+                    end
+                end
             end
         end
     end)
@@ -637,8 +666,8 @@ do
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         if not localRoot then return end
         for killerChar,data in pairs(STATE.activeAttackers) do
-            if killerChar and killerChar.Parent and data and not data.consumed and data.track and data.track.IsPlaying and data.profile and data.profile.type=="lungehold" then
-        local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+            if killerChar and killerChar.Parent and killerChar~=localChar and data and not data.consumed and data.track and data.track.IsPlaying and data.profile and data.profile.type=="lungehold" then
+                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                 if killerRoot then
                     local killerVelocity=killerRoot.AssemblyLinearVelocity
                     local killerFlatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
