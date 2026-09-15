@@ -27,10 +27,22 @@ do
     local HIDDEN_SPEED=13.8
     local HIDDEN_PREDICT_TIME=0.08
     local ABYSSWALKER_RANGE=12.5
+    local MASKED_RANGE=14.5
+    local MASKED_LUNGEHOLD_RANGE=14.5
+    local MASKED_LUNGEHOLD_ID=117070354890871
+    local MASKED_WALK_ID=111229698330816
+    local MASKED_ANIM1_ID=110360975271091
+    local MASKED_WALK_ANIM="rbxassetid://"..MASKED_WALK_ID
+    local MASKED_ANIM1="rbxassetid://"..MASKED_ANIM1_ID
+    local MASKED_LUNGEHOLD_ANIM="rbxassetid://"..MASKED_LUNGEHOLD_ID
+    local MASKED_WALK_MIN_SPEED=4
+    local MASKED_WALK_DOT=0.05
+    local MASKED_WALK_PREDICT=0.12
     local MASKED_EXTRA_ANIMS={
-        ["rbxassetid://117070354890871"]={type="lungehold",length=2.00,speed=1.00},
+        [MASKED_LUNGEHOLD_ANIM]={type="lungehold",length=2.00,speed=1.00},
         ["rbxassetid://106871536134254"]={type="attack",length=3.00,speed=1.00},
-        ["rbxassetid://109402730355822"]={type="attack",length=2.95,speed=1.00}
+        ["rbxassetid://109402730355822"]={type="attack",length=2.95,speed=1.00},
+        [MASKED_ANIM1]={type="attack",length=4.00,speed=1.00}
     }
     local CLOSE_RANGE=4.5
     local HARD_CLOSE_RANGE=2.75
@@ -278,15 +290,15 @@ do
         end)
         local distance=getSkillDistance(char)
         if distance<=ABYSSWALKER_RANGE then
-            if doSkillParry() then
-                data.consumed=true
-            end
+            if doSkillParry() then data.consumed=true end
         end
     end
     local function registerMaskedFastAttack(char,kName,track,profile,animId)
         if not isMaskedKiller(kName) then return end
         if STATE.ignoredTheMaskedDuck then return end
-        local data={name=kName,track=track,type="maskedfast",started=tick(),consumed=false,id=animId,profile=profile}
+        local isWalk=animId==MASKED_WALK_ID
+        local isLungeHold=animId==MASKED_LUNGEHOLD_ID
+        local data={name=kName,track=track,type=isWalk and "maskedwalk" or (isLungeHold and "maskedlungehold" or "maskedfast"),started=tick(),consumed=false,id=animId,profile=profile}
         STATE.activeMaskedSkillAttackers[char]=data
         local conn
         conn=track.Stopped:Connect(function()
@@ -297,10 +309,47 @@ do
                 end
             end)
         end)
-        local distance=getSkillDistance(char)
-        if distance<=STATE.autoParryRadius then
-            if doSkillParry() then data.consumed=true end
+        if not isWalk and not isLungeHold then
+            local distance=getSkillDistance(char)
+            if distance<=MASKED_RANGE then
+                if doSkillParry() then data.consumed=true end
+            end
+        elseif isLungeHold then
+            local distance=getSkillDistance(char)
+            if distance<=MASKED_LUNGEHOLD_RANGE then
+                if doSkillParry() then data.consumed=true end
+            end
         end
+    end
+    local function maskedLooseWallCheck(killerChar)
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot or not killerRoot then return false end
+        local origin=localRoot.Position+Vector3.new(0,0.8,0)
+        local target=killerRoot.Position+Vector3.new(0,0.8,0)
+        local direction=target-origin
+        if direction.Magnitude<=0.05 then return true end
+        local params=RaycastParams.new()
+        params.FilterType=Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances={localChar,killerChar}
+        params.IgnoreWater=true
+        local result=Workspace:Raycast(origin,direction,params)
+        if not result then return true end
+        local hit=result.Instance
+        if not hit then return true end
+        local n=hit.Name:lower()
+        if n:find("vault") or n:find("window") or n:find("ledge") or n:find("pallet") then
+            return true
+        end
+        local killerVelocity=killerRoot.AssemblyLinearVelocity
+        local flatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
+        local flatDirection=Vector3.new(direction.X,0,direction.Z)
+        if flatVelocity.Magnitude>=10 and flatDirection.Magnitude>0 then
+            local dot=flatVelocity.Unit:Dot(flatDirection.Unit)
+            if dot>=0.35 then return true end
+        end
+        return false
     end
     local function OnParryCharacterAdded(player,char)
         if player==localPlayer then return end
@@ -337,6 +386,10 @@ do
                         local maskedProfile=MASKED_EXTRA_ANIMS[animId]
                         if maskedProfile and isMaskedKiller(kName) then
                             registerMaskedFastAttack(char,kName,track,maskedProfile,tonumber(animId:match("%d+")))
+                            return
+                        end
+                        if animId==MASKED_WALK_ANIM and isMaskedKiller(kName) then
+                            registerMaskedFastAttack(char,kName,track,{type="walk",length=0.87,speed=2.02},MASKED_WALK_ID)
                             return
                         end
                         local profile=VALID_ANIM_IDS[animId]
@@ -557,17 +610,34 @@ do
                     local killerFlatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
                     local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
                     local distance=flatOffset.Magnitude
-                    if distance<=STATE.autoParryRadius then
-                        if doSkillParry() then data.consumed=true end
-                    else
-                        local relative=killerFlatVelocity-localFlatVelocity
-                        local closingSpeed=flatOffset.Magnitude>0 and relative:Dot(flatOffset.Unit) or 0
-                        if closingSpeed>0 then
-                            local predictedDistance=distance-closingSpeed*0.05
-                            if predictedDistance<=STATE.autoParryRadius then
-                                local actualDistance=getSkillDistance(killerChar)
-                                if actualDistance<=STATE.autoParryRadius then
+                    if data.type=="maskedlungehold" then
+                        if distance<=MASKED_LUNGEHOLD_RANGE then
+                            if doSkillParry() then data.consumed=true end
+                        end
+                    elseif data.type=="maskedwalk" then
+                        if distance<=MASKED_RANGE then
+                            local flatDirection=flatOffset.Magnitude>0 and flatOffset.Unit or Vector3.zero
+                            local closingSpeed=flatDirection.Magnitude>0 and killerFlatVelocity:Dot(flatDirection) or 0
+                            local predictedDistance=distance-math.max(closingSpeed,0)*MASKED_WALK_PREDICT
+                            if killerFlatVelocity.Magnitude>=MASKED_WALK_MIN_SPEED and closingSpeed>=MASKED_WALK_DOT and predictedDistance<=MASKED_RANGE then
+                                if maskedLooseWallCheck(killerChar) then
                                     if doSkillParry() then data.consumed=true end
+                                end
+                            end
+                        end
+                    else
+                        if distance<=MASKED_RANGE then
+                            if doSkillParry() then data.consumed=true end
+                        else
+                            local relative=killerFlatVelocity-localFlatVelocity
+                            local closingSpeed=flatOffset.Magnitude>0 and relative:Dot(flatOffset.Unit) or 0
+                            if closingSpeed>0 then
+                                local predictedDistance=distance-closingSpeed*0.05
+                                if predictedDistance<=MASKED_RANGE then
+                                    local actualDistance=getSkillDistance(killerChar)
+                                    if actualDistance<=MASKED_RANGE then
+                                        if doSkillParry() then data.consumed=true end
+                                    end
                                 end
                             end
                         end
