@@ -20,14 +20,13 @@ end
 local toggleAutoParryESP
 do
     local SKILL_ANIM_ID=98163597193511
-    local HIDDEN_SKILL_ANIMS={
-        [98163597193511]={name="98163597193511",speed=1.00,length=0},
-        [123809268724645]={name="Animation1",speed=1.00,length=3.98}
-    }
+    local ABYSSWALKER_ANIM_ID=80411309607666
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
+    local ABYSSWALKER_ANIM="rbxassetid://"..ABYSSWALKER_ANIM_ID
     local HIDDEN_RANGE=30
     local HIDDEN_SPEED=13.8
     local HIDDEN_PREDICT_TIME=0.08
+    local ABYSSWALKER_RANGE=10
     local MASKED_EXTRA_ANIMS={
         ["rbxassetid://117070354890871"]={type="lungehold",length=2.00,speed=1.00},
         ["rbxassetid://106871536134254"]={type="attack",length=3.00,speed=1.00},
@@ -193,6 +192,48 @@ do
         local b=killerRoot.Position
         return (Vector3.new(a.X,0,a.Z)-Vector3.new(b.X,0,b.Z)).Magnitude
     end
+    local function getFaceKillerThreshold()
+        local strictness=math.clamp(STATE.aimStrictness,-1,1)
+        if strictness<=-1 then return -1 end
+        local t=(strictness+1)/2
+        return 0.12+(t*0.18)
+    end
+    local function isFacingLocalPlayer(killerChar)
+        if STATE.aimStrictness<=-1 then return true end
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot or not killerRoot then return false end
+        local direction=localRoot.Position-killerRoot.Position
+        local flatDirection=Vector3.new(direction.X,0,direction.Z)
+        if flatDirection.Magnitude<=0.05 then return true end
+        local look=killerRoot.CFrame.LookVector
+        local flatLook=Vector3.new(look.X,0,look.Z)
+        if flatLook.Magnitude<=0.05 then return true end
+        local dot=flatLook.Unit:Dot(flatDirection.Unit)
+        local threshold=getFaceKillerThreshold()
+        if dot>=threshold then return true end
+        local velocity=killerRoot.AssemblyLinearVelocity
+        local flatVelocity=Vector3.new(velocity.X,0,velocity.Z)
+        if flatVelocity.Magnitude>6 then
+            local velocityDot=flatVelocity.Unit:Dot(flatDirection.Unit)
+            if velocityDot>=threshold-0.08 then return true end
+        end
+        return false
+    end
+    local function canNormalAttackParry(killerChar,distance)
+        if distance>STATE.autoParryRadius then return false end
+        if STATE.aimStrictness<=-1 then return true end
+        if isFacingLocalPlayer(killerChar) then return true end
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot or not killerRoot then return false end
+        local direction=localRoot.Position-killerRoot.Position
+        local flatDirection=Vector3.new(direction.X,0,direction.Z)
+        if flatDirection.Magnitude<=2.0 then return true end
+        return false
+    end
     local function tryHiddenParry(char,data)
         if data.consumed or not STATE.autoParryEnabled then return false end
         if isIgnoredSkillKiller(data.name) then return false end
@@ -206,10 +247,10 @@ do
         end
         return false
     end
-    local function registerSkillAttack(char,kName,track,skillId)
+    local function registerSkillAttack(char,kName,track)
         if kName:lower()~="the hidden" then return end
         if isIgnoredSkillKiller(kName) then return end
-        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=skillId or SKILL_ANIM_ID,skillProfile=HIDDEN_SKILL_ANIMS[skillId or SKILL_ANIM_ID]}
+        local data={name=kName,track=track,type="skill",started=tick(),consumed=false,skillId=SKILL_ANIM_ID}
         STATE.activeSkillAttackers[char]=data
         local conn
         conn=track.Stopped:Connect(function()
@@ -265,9 +306,23 @@ do
                         if not STATE.autoParryEnabled then return end
                         if not track or not track.Animation then return end
                         local animId=track.Animation.AnimationId
-                        local numericId=tonumber(animId:match("%d+"))
-                        if HIDDEN_SKILL_ANIMS[numericId] and kName:lower()=="the hidden" then
-                            registerSkillAttack(char,kName,track,numericId)
+                        if animId==INSTANT_ANIM_ID and kName:lower()=="the hidden" then
+                            registerSkillAttack(char,kName,track)
+                            return
+                        end
+                        if animId==ABYSSWALKER_ANIM then
+                            if STATE.ignoredTheAbysswalker then return end
+                            local data={name=kName,track=track,type="abysswalker",started=tick(),consumed=false,skillId=ABYSSWALKER_ANIM_ID}
+                            STATE.activeSkillAttackers[char]=data
+                            local conn
+                            conn=track.Stopped:Connect(function()
+                                if conn then conn:Disconnect() end
+                                task.defer(function()
+                                    if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
+                                        STATE.activeSkillAttackers[char]=nil
+                                    end
+                                end)
+                            end)
                             return
                         end
                         local maskedProfile=MASKED_EXTRA_ANIMS[animId]
@@ -277,6 +332,7 @@ do
                         end
                         local profile=VALID_ANIM_IDS[animId]
                         if not profile then return end
+                        local numericId=tonumber(animId:match("%d+"))
                         local data={name=kName,track=track,type=profile.type,id=numericId,profile=profile,started=tick(),consumed=false,lastTimePosition=-1}
                         STATE.activeAttackers[char]=data
                         local conn
@@ -406,7 +462,7 @@ do
                             critical=closingSpeed>=4 and timeToImpact<=0.16
                         end
                         if animationReady or lungeReady or critical then
-                            if distance<=STATE.autoParryRadius then
+                            if canNormalAttackParry(killerChar,distance) then
                                 local movingCorrectly=true
                                 if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
                                     movingCorrectly=flatVelocity.Unit:Dot(flatOffset.Unit)>=-0.1
@@ -439,7 +495,7 @@ do
                 STATE.activeSkillAttackers[killerChar]=nil
             elseif not data.track.IsPlaying then
                 STATE.activeSkillAttackers[killerChar]=nil
-            elseif not data.consumed and data.skillId and HIDDEN_SKILL_ANIMS[data.skillId] and data.name and data.name:lower()=="the hidden" then
+            elseif not data.consumed and data.skillId==SKILL_ANIM_ID and data.name and data.name:lower()=="the hidden" then
                 if not isIgnoredSkillKiller(data.name) then
                     local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                     if killerRoot then
@@ -462,6 +518,18 @@ do
                                     end
                                 end
                             end
+                        end
+                    end
+                end
+            elseif not data.consumed and data.skillId==ABYSSWALKER_ANIM_ID then
+                if not STATE.ignoredTheAbysswalker then
+                    local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+                    if killerRoot then
+                        local killerPos=killerRoot.Position
+                        local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
+                        local distance=flatOffset.Magnitude
+                        if distance<=ABYSSWALKER_RANGE then
+                            if doSkillParry() then data.consumed=true end
                         end
                     end
                 end
@@ -492,6 +560,69 @@ do
                                 if actualDistance<=STATE.autoParryRadius then
                                     if doSkillParry() then data.consumed=true end
                                 end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    RunService.Heartbeat:Connect(function()
+        if not STATE.autoParryEnabled then return end
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        if not localRoot then return end
+        local localVelocity=localRoot.AssemblyLinearVelocity
+        local localFlatVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
+        local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+        for killerChar,data in pairs(STATE.activeAttackers) do
+            if killerChar and killerChar.Parent and data and not data.consumed and data.track and data.track.IsPlaying and data.profile and data.profile.type=="lungehold" then
+                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+                if killerRoot then
+                    local killerVelocity=killerRoot.AssemblyLinearVelocity
+                    local killerFlatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
+                    local offset=localRoot.Position-killerRoot.Position
+                    local flatOffset=Vector3.new(offset.X,0,offset.Z)
+                    local distance=flatOffset.Magnitude
+                    local closingSpeed=0
+                    if distance>0 then
+                        closingSpeed=(killerFlatVelocity-localFlatVelocity):Dot(flatOffset.Unit)
+                    end
+                    local position=data.track.TimePosition or 0
+                    local realLength=data.track.Length
+                    local length=(realLength and realLength>0) and realLength or data.profile.length
+                    local speed=data.profile.speed or 1
+                    local progress=length>0 and (position*speed)/(length/speed) or 0
+                    local animationStarted=position>=0.006 or progress>=0.006
+                    local attackReach=3.5
+                    local impactDistance=math.max(distance-attackReach,0)
+                    local timeToImpact=math.huge
+                    if closingSpeed>0 then
+                        timeToImpact=impactDistance/closingSpeed
+                    end
+                    local predictedKiller=killerRoot.Position+killerFlatVelocity*(ping+0.035)
+                    local predictedLocal=localRoot.Position+localFlatVelocity*ping
+                    local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
+                    local trigger=false
+                    if distance<=HARD_CLOSE_RANGE then
+                        trigger=true
+                    elseif closingSpeed>=3 and timeToImpact<=0.22 then
+                        trigger=true
+                    elseif closingSpeed>=6 and timeToImpact<=0.30 then
+                        trigger=true
+                    elseif predictedDistance<=STATE.autoParryRadius and closingSpeed>=3 then
+                        trigger=true
+                    elseif animationStarted and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+1.5 then
+                        trigger=true
+                    end
+                    if trigger and distance<=STATE.autoParryRadius then
+                        local movingCorrectly=true
+                        if flatOffset.Magnitude>0 and killerFlatVelocity.Magnitude>5 then
+                            movingCorrectly=killerFlatVelocity.Unit:Dot(flatOffset.Unit)>=-0.15
+                        end
+                        if movingCorrectly then
+                            if doParry(true,killerChar,distance) then
+                                data.consumed=true
                             end
                         end
                     end
@@ -634,6 +765,13 @@ local function BuildUI()
         Title="The Abysswalker",Default=false,
         Callback=function(v)
             STATE.ignoredTheAbysswalker=v
+            if v then
+                for char,data in pairs(STATE.activeSkillAttackers) do
+                    if data and data.skillId==ABYSSWALKER_ANIM_ID then
+                        STATE.activeSkillAttackers[char]=nil
+                    end
+                end
+            end
         end,
     })
     APSection:AddToggle({
