@@ -28,21 +28,23 @@ do
     local HIDDEN_PREDICT_TIME=0.08
     local ABYSSWALKER_RANGE=12.5
     local MASKED_RANGE=14.5
-    local MASKED_LUNGEHOLD_RANGE=14.5
-    local MASKED_LUNGEHOLD_ID=117070354890871
+    local MASKED_SPECIAL_RANGE=13.6
+    local MASKED_SPECIAL_IDS={
+        [109402730355822]=true,
+        [110360975271091]=true,
+        [117070354890871]=true
+    }
     local MASKED_WALK_ID=111229698330816
     local MASKED_ANIM1_ID=110360975271091
     local MASKED_WALK_ANIM="rbxassetid://"..MASKED_WALK_ID
     local MASKED_ANIM1="rbxassetid://"..MASKED_ANIM1_ID
-    local MASKED_LUNGEHOLD_ANIM="rbxassetid://"..MASKED_LUNGEHOLD_ID
     local MASKED_WALK_MIN_SPEED=4
     local MASKED_WALK_DOT=0.05
     local MASKED_WALK_PREDICT=0.12
     local MASKED_EXTRA_ANIMS={
-        [MASKED_LUNGEHOLD_ANIM]={type="lungehold",length=2.00,speed=1.00},
-        ["rbxassetid://106871536134254"]={type="attack",length=3.00,speed=1.00},
-        ["rbxassetid://109402730355822"]={type="attack",length=2.95,speed=1.00},
-        [MASKED_ANIM1]={type="attack",length=4.00,speed=1.00}
+        ["rbxassetid://117070354890871"]={type="masked_special",length=2.00,speed=1.00},
+        ["rbxassetid://109402730355822"]={type="masked_special",length=2.95,speed=1.00},
+        [MASKED_ANIM1]={type="masked_special",length=4.00,speed=1.00}
     }
     local CLOSE_RANGE=4.5
     local HARD_CLOSE_RANGE=2.75
@@ -293,34 +295,6 @@ do
             if doSkillParry() then data.consumed=true end
         end
     end
-    local function registerMaskedFastAttack(char,kName,track,profile,animId)
-        if not isMaskedKiller(kName) then return end
-        if STATE.ignoredTheMaskedDuck then return end
-        local isWalk=animId==MASKED_WALK_ID
-        local isLungeHold=animId==MASKED_LUNGEHOLD_ID
-        local data={name=kName,track=track,type=isWalk and "maskedwalk" or (isLungeHold and "maskedlungehold" or "maskedfast"),started=tick(),consumed=false,id=animId,profile=profile}
-        STATE.activeMaskedSkillAttackers[char]=data
-        local conn
-        conn=track.Stopped:Connect(function()
-            if conn then conn:Disconnect() end
-            task.defer(function()
-                if STATE.activeMaskedSkillAttackers[char] and STATE.activeMaskedSkillAttackers[char].track==track then
-                    STATE.activeMaskedSkillAttackers[char]=nil
-                end
-            end)
-        end)
-        if not isWalk and not isLungeHold then
-            local distance=getSkillDistance(char)
-            if distance<=MASKED_RANGE then
-                if doSkillParry() then data.consumed=true end
-            end
-        elseif isLungeHold then
-            local distance=getSkillDistance(char)
-            if distance<=MASKED_LUNGEHOLD_RANGE then
-                if doSkillParry() then data.consumed=true end
-            end
-        end
-    end
     local function maskedLooseWallCheck(killerChar)
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
@@ -350,6 +324,34 @@ do
             if dot>=0.35 then return true end
         end
         return false
+    end
+    local function registerMaskedFastAttack(char,kName,track,profile,animId)
+        if not isMaskedKiller(kName) then return end
+        if STATE.ignoredTheMaskedDuck then return end
+        local isWalk=animId==MASKED_WALK_ID
+        local isSpecial=MASKED_SPECIAL_IDS[animId]==true
+        local data={name=kName,track=track,type=isWalk and "maskedwalk" or (isSpecial and "maskedspecial" or "maskedfast"),started=tick(),consumed=false,id=animId,profile=profile}
+        STATE.activeMaskedSkillAttackers[char]=data
+        local conn
+        conn=track.Stopped:Connect(function()
+            if conn then conn:Disconnect() end
+            task.defer(function()
+                if STATE.activeMaskedSkillAttackers[char] and STATE.activeMaskedSkillAttackers[char].track==track then
+                    STATE.activeMaskedSkillAttackers[char]=nil
+                end
+            end)
+        end)
+        if not isWalk and not isSpecial then
+            local distance=getSkillDistance(char)
+            if distance<=MASKED_RANGE then
+                if doSkillParry() then data.consumed=true end
+            end
+        elseif isSpecial then
+            local distance=getSkillDistance(char)
+            if distance<=MASKED_SPECIAL_RANGE and maskedLooseWallCheck(char) then
+                if doSkillParry() then data.consumed=true end
+            end
+        end
     end
     local function OnParryCharacterAdded(player,char)
         if player==localPlayer then return end
@@ -544,7 +546,7 @@ do
             end
         end
     end)
-    RunService.Heartbeat:Connect(function()
+   RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then return end
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
@@ -610,8 +612,8 @@ do
                     local killerFlatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
                     local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
                     local distance=flatOffset.Magnitude
-                    if data.type=="maskedlungehold" then
-                        if distance<=MASKED_LUNGEHOLD_RANGE then
+                    if data.type=="maskedspecial" then
+                        if distance<=MASKED_SPECIAL_RANGE and maskedLooseWallCheck(killerChar) then
                             if doSkillParry() then data.consumed=true end
                         end
                     elseif data.type=="maskedwalk" then
@@ -696,7 +698,8 @@ do
                     end
                     if trigger and distance<=STATE.autoParryRadius then
                         local movingCorrectly=true
-                        if flatOffset.Magnitude>0 and killerFlatVelocity.Magnitude>5 then
+                        if flatOffset.Magnitude>0 and killerFlatVelocity.Magnitude>5
+                    then
                             movingCorrectly=killerFlatVelocity.Unit:Dot(flatOffset.Unit)>=-0.15
                         end
                         if movingCorrectly then
