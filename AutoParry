@@ -30,7 +30,8 @@ do
     local MASKED_RANGE=15.5
     local MASKED_SPECIAL_RANGE=15.5
     local MASKED_CLOSE_RANGE=3.0
-    local MASKED_SEQUENCE_TIME=5.0
+    local MASKED_SEQUENCE_TIME=2.25
+    local MASKED_WALK_START_WINDOW=0.12
     local MASKED_LUNGEHOLD_ID=117070354890871
     local MASKED_WALK_ID=111229698330816
     local MASKED_ATTACK_ID=106871536134254
@@ -50,6 +51,9 @@ do
     local MIN_CLOSING_SPEED=2
     local EMERGENCY_TIME=0.18
     local VAULT_EXTRA_RANGE=2.25
+    local EDGE_TOLERANCE=1.0
+    local EARLY_TRIGGER_TIME=0.010
+    local EARLY_TRIGGER_PROGRESS=0.006
     local ATTACK_PROFILES={
         [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
         [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
@@ -147,34 +151,65 @@ do
             local data=STATE.activeAttackers[killerChar]
             if data and data.profile and data.profile.type=="lungehold" then allowVault=true end
             if distance>allowedRange then return false end
-            local function pathClear()
-                local localChar=localPlayer.Character
-                local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
-                if not localRoot or not killerRoot then return false end
-                local origin=localRoot.Position
-                local target=killerRoot.Position
-                local direction=target-origin
-                if direction.Magnitude<=0.05 then return true end
-                local params=RaycastParams.new()
-                params.FilterType=Enum.RaycastFilterType.Exclude
-                params.FilterDescendantsInstances={localChar,killerChar}
-                params.IgnoreWater=true
-                local offsets={Vector3.new(0,0,0),Vector3.new(0,1.1,0),Vector3.new(0,-0.75,0)}
-                local vaultHit=false
-                for _,offset in ipairs(offsets) do
-                    local result=Workspace:Raycast(origin+offset,direction,params)
-                    if not result then return true end
+            local localChar=localPlayer.Character
+            local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+            local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
+            if not localRoot or not killerRoot then return false end
+            local origin=localRoot.Position
+            local target=killerRoot.Position
+            local direction=target-origin
+            if direction.Magnitude<=0.05 then
+                STATE.lastParryTime=now
+                STATE.lastSkillParryTime=now
+                sendParryInput()
+                return true
+            end
+            local params=RaycastParams.new()
+            params.FilterType=Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances={localChar,killerChar}
+            params.IgnoreWater=true
+            local flat=Vector3.new(direction.X,0,direction.Z)
+            local flatUnit=flat.Magnitude>0.05 and flat.Unit or Vector3.zero
+            local right=flatUnit:Cross(Vector3.new(0,1,0))
+            local rayData={
+                {origin+Vector3.new(0,0,0),target+Vector3.new(0,0,0)},
+                {origin+Vector3.new(0,1.1,0),target+Vector3.new(0,1.1,0)},
+                {origin+Vector3.new(0,-0.75,0),target+Vector3.new(0,-0.75,0)},
+                {origin+right*EDGE_TOLERANCE,target+right*EDGE_TOLERANCE},
+                {origin-right*EDGE_TOLERANCE,target-right*EDGE_TOLERANCE},
+                {origin+right*(EDGE_TOLERANCE*0.55)+Vector3.new(0,0.75,0),target+right*(EDGE_TOLERANCE*0.55)+Vector3.new(0,0.75,0)},
+                {origin-right*(EDGE_TOLERANCE*0.55)+Vector3.new(0,0.75,0),target-right*(EDGE_TOLERANCE*0.55)+Vector3.new(0,0.75,0)}
+            }
+            local clearCount=0
+            local blockedCount=0
+            local vaultHit=false
+            for _,pair in ipairs(rayData) do
+                local rayOrigin=pair[1]
+                local rayTarget=pair[2]
+                local rayDirection=rayTarget-rayOrigin
+                local result=Workspace:Raycast(rayOrigin,rayDirection,params)
+                if not result then
+                    clearCount=clearCount+1
+                else
+                    blockedCount=blockedCount+1
                     local hit=result.Instance
                     if hit then
                         local n=hit.Name:lower()
                         if n:find("vault") or n:find("window") or n:find("ledge") then vaultHit=true end
                     end
                 end
-                if allowVault and vaultHit and distance<=allowedRange+VAULT_EXTRA_RANGE then return true end
-                return false
             end
-            if not pathClear() then return false end
+            if clearCount==0 then
+                if allowVault and vaultHit and distance<=allowedRange+VAULT_EXTRA_RANGE then
+                    -- allowed vault/window/ledge
+                else
+                    return false
+                end
+            elseif blockedCount>=5 and clearCount<2 then
+                if not (allowVault and vaultHit and distance<=allowedRange+VAULT_EXTRA_RANGE) then
+                    return false
+                end
+            end
         end
         STATE.lastParryTime=now
         STATE.lastSkillParryTime=now
@@ -298,9 +333,54 @@ do
             if doSkillParry() then data.consumed=true end
         end
     end
+    local function getMaskedWalkTracks(char)
+        local tracks={}
+        local humanoid=char and char:FindFirstChildOfClass("Humanoid")
+        local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
+        if not animator then return tracks end
+        for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
+            if track and track.IsPlaying and track.Animation then
+                local id=getAnimNumericId(track.Animation.AnimationId)
+                if id==MASKED_WALK_ID then
+                    tracks[track]=true
+                end
+            end
+        end
+        return tracks
+    end
     local function clearMaskedSequence(char)
         STATE.maskedSequence[char]=nil
         STATE.maskedLungeArmed[char]=nil
+    end
+    local function maskedWalkIsNew(seq,track)
+        if not seq or not track then return false end
+        if seq.baselineWalkTracks and seq.baselineWalkTracks[track] then return false end
+        if seq.acceptedWalkTracks and seq.acceptedWalkTracks[track] then return false end
+        if seq.lungeTrack==track then return false end
+        local position=track.TimePosition or 0
+        if position>MASKED_WALK_START_WINDOW then return false end
+        return true
+    end
+    local function triggerMaskedSequence(char,seq,track)
+        if not seq or seq.consumed or not seq.armed then return false end
+        if not maskedWalkIsNew(seq,track) then return false end
+        local now=tick()
+        if now<seq.armedAt or now>seq.expires then return false end
+        seq.acceptedWalkTracks=seq.acceptedWalkTracks or {}
+        seq.acceptedWalkTracks[track]=true
+        seq.walkTrack=track
+        seq.walkStarted=now
+        seq.walkSeen=true
+        local distance=getSkillDistance(char)
+        if distance<=MASKED_RANGE then
+            if doSkillParry() then
+                seq.consumed=true
+                seq.armed=false
+                clearMaskedSequence(char)
+                return true
+            end
+        end
+        return false
     end
     local function registerMaskedFastAttack(char,kName,track,profile,animId)
         if STATE.ignoredTheMaskedDuck then return end
@@ -310,15 +390,9 @@ do
             local now=tick()
             local existing=STATE.maskedSequence[char]
             if existing and existing.armed and not existing.consumed and now<=existing.expires then
-                existing.lungeTrack=track
-                existing.armedAt=now
-                existing.expires=now+MASKED_SEQUENCE_TIME
-                existing.walkTrack=nil
-                existing.walkStarted=nil
-                existing.walkSeen=false
-                STATE.maskedLungeArmed[char]=existing
-                return
+                if existing.lungeTrack==track then return end
             end
+            local baselineWalkTracks=getMaskedWalkTracks(char)
             local seq={
                 armed=true,
                 armedAt=now,
@@ -327,7 +401,9 @@ do
                 walkTrack=nil,
                 walkStarted=nil,
                 walkSeen=false,
-                consumed=false
+                consumed=false,
+                baselineWalkTracks=baselineWalkTracks,
+                acceptedWalkTracks={}
             }
             STATE.maskedSequence[char]=seq
             STATE.maskedLungeArmed[char]=seq
@@ -335,24 +411,8 @@ do
         end
         if numericId==MASKED_WALK_ID then
             local seq=STATE.maskedSequence[char]
-            if seq and seq.armed and not seq.consumed and tick()<=seq.expires then
-                seq.walkTrack=track
-                seq.walkStarted=seq.walkStarted or tick()
-                seq.walkSeen=true
-                local distance=getSkillDistance(char)
-                if distance<=MASKED_CLOSE_RANGE then
-                    if doSkillParry() then
-                        seq.consumed=true
-                        seq.armed=false
-                        clearMaskedSequence(char)
-                    end
-                elseif distance<=MASKED_RANGE then
-                    if doSkillParry() then
-                        seq.consumed=true
-                        seq.armed=false
-                        clearMaskedSequence(char)
-                    end
-                end
+            if seq then
+                triggerMaskedSequence(char,seq,track)
             end
             return
         end
@@ -382,9 +442,8 @@ do
             if doSkillParry() then data.consumed=true end
         end
     end
-    local function maskedSequenceMonitor()
+    local function maskedHeartbeatMonitor()
         if not STATE.autoParryEnabled then return end
-        if next(STATE.maskedSequence)==nil then return end
         for killerChar,seq in pairs(STATE.maskedSequence) do
             if not killerChar or not killerChar.Parent or not seq then
                 clearMaskedSequence(killerChar)
@@ -392,21 +451,6 @@ do
                 clearMaskedSequence(killerChar)
             elseif tick()>seq.expires then
                 clearMaskedSequence(killerChar)
-            elseif seq.walkSeen then
-                local distance=getSkillDistance(killerChar)
-                if distance<=MASKED_CLOSE_RANGE then
-                    if doSkillParry() then
-                        seq.consumed=true
-                        seq.armed=false
-                        clearMaskedSequence(killerChar)
-                    end
-                elseif distance<=MASKED_RANGE then
-                    if doSkillParry() then
-                        seq.consumed=true
-                        seq.armed=false
-                        clearMaskedSequence(killerChar)
-                    end
-                end
             else
                 local humanoid=killerChar:FindFirstChildOfClass("Humanoid")
                 local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
@@ -414,25 +458,8 @@ do
                     for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
                         if track and track.IsPlaying and track.Animation then
                             local id=getAnimNumericId(track.Animation.AnimationId)
-                            if id==MASKED_WALK_ID then
-                                seq.walkTrack=track
-                                seq.walkStarted=seq.walkStarted or tick()
-                                seq.walkSeen=true
-                                local distance=getSkillDistance(killerChar)
-                                if distance<=MASKED_CLOSE_RANGE then
-                                    if doSkillParry() then
-                                        seq.consumed=true
-                                        seq.armed=false
-                                        clearMaskedSequence(killerChar)
-                                    end
-                                elseif distance<=MASKED_RANGE then
-                                    if doSkillParry() then
-                                        seq.consumed=true
-                                        seq.armed=false
-                                        clearMaskedSequence(killerChar)
-                                    end
-                                end
-                                break
+                            if id==MASKED_WALK_ID and maskedWalkIsNew(seq,track) then
+                                if triggerMaskedSequence(killerChar,seq,track) then break end
                             end
                         end
                     end
@@ -684,8 +711,8 @@ do
                             local impactDistance=math.max(distance-attackReach,0)
                             local timeToImpact=math.huge
                             if closingSpeed>0 then timeToImpact=impactDistance/closingSpeed end
-                            lungeReady=closingSpeed>=6 and timeToImpact<=0.32
-                            critical=closingSpeed>=4 and timeToImpact<=0.16
+                            lungeReady=closingSpeed>=5 and timeToImpact<=0.30
+                            critical=closingSpeed>=3.5 and timeToImpact<=0.15
                         end
                         if animationReady or lungeReady or critical then
                             if canNormalAttackParry(killerChar,distance) then
@@ -777,7 +804,7 @@ RunService.Heartbeat:Connect(function()
                 end
             end
         end
-        maskedSequenceMonitor()
+        maskedHeartbeatMonitor()
     end)
     RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then return end
@@ -800,25 +827,25 @@ RunService.Heartbeat:Connect(function()
                     local length=(realLength and realLength>0) and realLength or data.profile.length
                     local speed=data.profile.speed or 1
                     local progress=length>0 and (position*speed)/length or 0
-                    local animationStarted=position>=0.006 or progress>=0.006
+                    local animationStarted=position>=EARLY_TRIGGER_TIME or progress>=EARLY_TRIGGER_PROGRESS
                     local attackReach=3.5
                     local impactDistance=math.max(distance-attackReach,0)
                     local timeToImpact=math.huge
                     if closingSpeed>0 then timeToImpact=impactDistance/closingSpeed end
                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-                    local predictedKiller=killerRoot.Position+killerFlatVelocity*(ping+0.035)
+                    local predictedKiller=killerRoot.Position+killerFlatVelocity*(ping+0.045)
                     local predictedLocal=localRoot.Position
                     local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
                     local trigger=false
                     if distance<=HARD_CLOSE_RANGE then
                         trigger=true
-                    elseif closingSpeed>=3 and timeToImpact<=0.22 then
+                    elseif closingSpeed>=2.5 and timeToImpact<=0.24 then
                         trigger=true
-                    elseif closingSpeed>=6 and timeToImpact<=0.30 then
+                    elseif closingSpeed>=5 and timeToImpact<=0.32 then
                         trigger=true
-                    elseif predictedDistance<=STATE.autoParryRadius and closingSpeed>=3 then
+                    elseif predictedDistance<=STATE.autoParryRadius and closingSpeed>=2.5 then
                         trigger=true
-                    elseif animationStarted and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+1.5 then
+                    elseif animationStarted and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+1.75 then
                         trigger=true
                     end
                     if trigger and distance<=STATE.autoParryRadius then
