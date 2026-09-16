@@ -31,7 +31,6 @@ do
     local MASKED_SPECIAL_RANGE=15.5
     local MASKED_CLOSE_RANGE=3.0
     local MASKED_SEQUENCE_TIME=2.25
-    local MASKED_WALK_START_WINDOW=0.12
     local MASKED_LUNGEHOLD_ID=117070354890871
     local MASKED_WALK_ID=111229698330816
     local MASKED_ATTACK_ID=106871536134254
@@ -172,7 +171,7 @@ do
             local flatUnit=flat.Magnitude>0.05 and flat.Unit or Vector3.zero
             local right=flatUnit:Cross(Vector3.new(0,1,0))
             local rayData={
-                {origin+Vector3.new(0,0,0),target+Vector3.new(0,0,0)},
+                {origin,target},
                 {origin+Vector3.new(0,1.1,0),target+Vector3.new(0,1.1,0)},
                 {origin+Vector3.new(0,-0.75,0),target+Vector3.new(0,-0.75,0)},
                 {origin+right*EDGE_TOLERANCE,target+right*EDGE_TOLERANCE},
@@ -201,7 +200,6 @@ do
             end
             if clearCount==0 then
                 if allowVault and vaultHit and distance<=allowedRange+VAULT_EXTRA_RANGE then
-                    -- allowed vault/window/ledge
                 else
                     return false
                 end
@@ -354,11 +352,10 @@ do
     end
     local function maskedWalkIsNew(seq,track)
         if not seq or not track then return false end
+        if seq.consumed or not seq.armed then return false end
         if seq.baselineWalkTracks and seq.baselineWalkTracks[track] then return false end
         if seq.acceptedWalkTracks and seq.acceptedWalkTracks[track] then return false end
         if seq.lungeTrack==track then return false end
-        local position=track.TimePosition or 0
-        if position>MASKED_WALK_START_WINDOW then return false end
         return true
     end
     local function triggerMaskedSequence(char,seq,track)
@@ -389,8 +386,8 @@ do
         if numericId==MASKED_LUNGEHOLD_ID then
             local now=tick()
             local existing=STATE.maskedSequence[char]
-            if existing and existing.armed and not existing.consumed and now<=existing.expires then
-                if existing.lungeTrack==track then return end
+            if existing and existing.armed and not existing.consumed and now<=existing.expires and existing.lungeTrack==track then
+                return
             end
             local baselineWalkTracks=getMaskedWalkTracks(char)
             local seq={
@@ -459,7 +456,8 @@ do
                         if track and track.IsPlaying and track.Animation then
                             local id=getAnimNumericId(track.Animation.AnimationId)
                             if id==MASKED_WALK_ID and maskedWalkIsNew(seq,track) then
-                                if triggerMaskedSequence(killerChar,seq,track) then break end
+                                triggerMaskedSequence(killerChar,seq,track)
+                                if not STATE.maskedSequence[killerChar] then break end
                             end
                         end
                     end
