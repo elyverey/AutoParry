@@ -70,6 +70,10 @@ do
         [115244153053858]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
         [130593238885843]={type="attack",length=1.70,speed=1.00,triggerProgress=0.012,triggerTime=0.020}
     }
+    local VALID_ANIM_IDS={}
+    for id,profile in pairs(ATTACK_PROFILES) do
+        VALID_ANIM_IDS["rbxassetid://"..id]=profile
+    end
     local function getAnimNumericId(animId)
         if typeof(animId)~="string" then return nil end
         return tonumber(animId:match("%d+"))
@@ -128,10 +132,15 @@ do
             end)
         end
     end
+    local function parryInputAvailable(now)
+        if now-STATE.lastParryTime<0.01 then return false end
+        if now-STATE.lastSkillParryTime<0.01 then return false end
+        return true
+    end
     local function doParry(force,killerChar,distance)
         if not STATE.autoParryEnabled then return false end
         local now=tick()
-        if now-STATE.lastParryTime<0.01 then return false end
+        if not parryInputAvailable(now) then return false end
         if killerChar and distance then
             local allowedRange=STATE.autoParryRadius
             local allowVault=false
@@ -168,14 +177,16 @@ do
             if not pathClear() then return false end
         end
         STATE.lastParryTime=now
+        STATE.lastSkillParryTime=now
         sendParryInput()
         return true
     end
     local function doSkillParry()
         if not STATE.autoParryEnabled then return false end
         local now=tick()
-        if now-STATE.lastSkillParryTime<0.003 then return false end
+        if not parryInputAvailable(now) then return false end
         STATE.lastSkillParryTime=now
+        STATE.lastParryTime=now
         sendParryInput()
         return true
     end
@@ -262,7 +273,9 @@ do
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.defer(function()
-                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then STATE.activeSkillAttackers[char]=nil end
+                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
+                    STATE.activeSkillAttackers[char]=nil
+                end
             end)
         end)
         tryHiddenParry(char,data)
@@ -275,7 +288,9 @@ do
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.defer(function()
-                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then STATE.activeSkillAttackers[char]=nil end
+                if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
+                    STATE.activeSkillAttackers[char]=nil
+                end
             end)
         end)
         local distance=getSkillDistance(char)
@@ -283,12 +298,27 @@ do
             if doSkillParry() then data.consumed=true end
         end
     end
+    local function clearMaskedSequence(char)
+        STATE.maskedSequence[char]=nil
+        STATE.maskedLungeArmed[char]=nil
+    end
     local function registerMaskedFastAttack(char,kName,track,profile,animId)
         if STATE.ignoredTheMaskedDuck then return end
         local numericId=typeof(animId)=="number" and animId or getAnimNumericId(track.Animation and track.Animation.AnimationId)
         if not numericId then return end
         if numericId==MASKED_LUNGEHOLD_ID then
             local now=tick()
+            local existing=STATE.maskedSequence[char]
+            if existing and existing.armed and not existing.consumed and now<=existing.expires then
+                existing.lungeTrack=track
+                existing.armedAt=now
+                existing.expires=now+MASKED_SEQUENCE_TIME
+                existing.walkTrack=nil
+                existing.walkStarted=nil
+                existing.walkSeen=false
+                STATE.maskedLungeArmed[char]=existing
+                return
+            end
             local seq={
                 armed=true,
                 armedAt=now,
@@ -314,15 +344,13 @@ do
                     if doSkillParry() then
                         seq.consumed=true
                         seq.armed=false
-                        STATE.maskedSequence[char]=nil
-                        STATE.maskedLungeArmed[char]=nil
+                        clearMaskedSequence(char)
                     end
                 elseif distance<=MASKED_RANGE then
                     if doSkillParry() then
                         seq.consumed=true
                         seq.armed=false
-                        STATE.maskedSequence[char]=nil
-                        STATE.maskedLungeArmed[char]=nil
+                        clearMaskedSequence(char)
                     end
                 end
             end
@@ -344,7 +372,9 @@ do
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.defer(function()
-                if STATE.activeMaskedSkillAttackers[char] and STATE.activeMaskedSkillAttackers[char].track==track then STATE.activeMaskedSkillAttackers[char]=nil end
+                if STATE.activeMaskedSkillAttackers[char] and STATE.activeMaskedSkillAttackers[char].track==track then
+                    STATE.activeMaskedSkillAttackers[char]=nil
+                end
             end)
         end)
         local distance=getSkillDistance(char)
@@ -357,113 +387,24 @@ do
         if next(STATE.maskedSequence)==nil then return end
         for killerChar,seq in pairs(STATE.maskedSequence) do
             if not killerChar or not killerChar.Parent or not seq then
-                STATE.maskedSequence[killerChar]=nil
-                STATE.maskedLungeArmed[killerChar]=nil
+                clearMaskedSequence(killerChar)
             elseif not seq.armed or seq.consumed then
-                STATE.maskedSequence[killerChar]=nil
-                STATE.maskedLungeArmed[killerChar]=nil
+                clearMaskedSequence(killerChar)
             elseif tick()>seq.expires then
-                STATE.maskedSequence[killerChar]=nil
-                STATE.maskedLungeArmed[killerChar]=nil
+                clearMaskedSequence(killerChar)
             elseif seq.walkSeen then
                 local distance=getSkillDistance(killerChar)
                 if distance<=MASKED_CLOSE_RANGE then
                     if doSkillParry() then
                         seq.consumed=true
                         seq.armed=false
-                        STATE.maskedSequence[killerChar]=nil
-                        STATE.maskedLungeArmed[killerChar]=nil
+                        clearMaskedSequence(killerChar)
                     end
                 elseif distance<=MASKED_RANGE then
                     if doSkillParry() then
                         seq.consumed=true
                         seq.armed=false
-                        STATE.maskedSequence[killerChar]=nil
-                        STATE.maskedLungeArmed[killerChar]=nil
-                    end
-                end
-            else
-                local humanoid=killerChar:FindFirstChildOfClass("Humanoid")
-                local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
-                if animator then
-                    for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
-                        if track and track.IsPlaying and track.Animation then
-                            local id=getAnimNumericId(track.Animation.AnimationId)
-                            if id==MASKED_WALK_ID then
-                                seq.walkTrack=track
-                                seq.walkStarted=seq.walkStarted or tick()
-                                seq.walkSeen=true
-                                local distance=getSkillDistance(killerChar)
-                                if distance<=MASKED_CLOSE_RANGE then
-                    if doSkillParry() then
-                        seq.consumed=true
-                        seq.armed=false
-                        STATE.maskedSequence[char]=nil
-                        STATE.maskedLungeArmed[char]=nil
-                    end
-                elseif distance<=MASKED_RANGE then
-                    if doSkillParry() then
-                        seq.consumed=true
-                        seq.armed=false
-                        STATE.maskedSequence[char]=nil
-                        STATE.maskedLungeArmed[char]=nil
-                    end
-                end
-            end
-            return
-        end
-        if numericId==MASKED_ATTACK_ID or numericId==MASKED_ATTACKDONE_ID then return end
-        if not MASKED_SPECIAL_IDS[numericId] then return end
-        local data={
-            name=kName or "The Masked (Duck)",
-            track=track,
-            type="maskedspecial",
-            started=tick(),
-            consumed=false,
-            id=numericId,
-            profile=profile
-        }
-        STATE.activeMaskedSkillAttackers[char]=data
-        local conn
-        conn=track.Stopped:Connect(function()
-            if conn then conn:Disconnect() end
-            task.defer(function()
-                if STATE.activeMaskedSkillAttackers[char] and STATE.activeMaskedSkillAttackers[char].track==track then STATE.activeMaskedSkillAttackers[char]=nil end
-            end)
-        end)
-        local distance=getSkillDistance(char)
-        if distance<=MASKED_SPECIAL_RANGE then
-            if doSkillParry() then data.consumed=true end
-        end
-    end
-    local function maskedSequenceMonitor()
-        if not STATE.autoParryEnabled then return end
-        if next(STATE.maskedSequence)==nil then return end
-        for killerChar,seq in pairs(STATE.maskedSequence) do
-            if not killerChar or not killerChar.Parent or not seq then
-                STATE.maskedSequence[killerChar]=nil
-                STATE.maskedLungeArmed[killerChar]=nil
-            elseif not seq.armed or seq.consumed then
-                STATE.maskedSequence[killerChar]=nil
-                STATE.maskedLungeArmed[killerChar]=nil
-            elseif tick()>seq.expires then
-                STATE.maskedSequence[killerChar]=nil
-                STATE.maskedLungeArmed[killerChar]=nil
-            elseif seq.walkSeen then
-                local distance=getSkillDistance(killerChar)
-                if distance<=MASKED_CLOSE_RANGE then
-                    if doSkillParry() then
-                        seq.consumed=true
-                        seq.armed=false
-                        STATE.maskedSequence[killerChar]=nil
-                        STATE.maskedLungeArmed[killerChar]=nil
-                    end
-                elseif distance<=MASKED_RANGE then
-                    if doSkillParry() then
-                        seq.consumed=true
-                        seq.armed=false
-                        STATE.maskedSequence[killerChar]=nil
-                        STATE.maskedLungeArmed[killerChar]=nil
+                        clearMaskedSequence(killerChar)
                     end
                 end
             else
@@ -482,15 +423,13 @@ do
                                     if doSkillParry() then
                                         seq.consumed=true
                                         seq.armed=false
-                                        STATE.maskedSequence[killerChar]=nil
-                                        STATE.maskedLungeArmed[killerChar]=nil
+                                        clearMaskedSequence(killerChar)
                                     end
                                 elseif distance<=MASKED_RANGE then
                                     if doSkillParry() then
                                         seq.consumed=true
                                         seq.armed=false
-                                        STATE.maskedSequence[killerChar]=nil
-                                        STATE.maskedLungeArmed[killerChar]=nil
+                                        clearMaskedSequence(killerChar)
                                     end
                                 end
                                 break
@@ -769,7 +708,8 @@ do
             end
         end
     end)
-    RunService.Heartbeat:Connect(function()
+
+RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then return end
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
