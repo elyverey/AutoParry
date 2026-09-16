@@ -51,27 +51,27 @@ do
     local EMERGENCY_TIME=0.18
     local VAULT_EXTRA_RANGE=2.25
     local EDGE_TOLERANCE=1.0
-    local EARLY_TRIGGER_TIME=0.010
-    local EARLY_TRIGGER_PROGRESS=0.006
+    local EARLY_TRIGGER_TIME=0.004
+    local EARLY_TRIGGER_PROGRESS=0.002
     local ATTACK_PROFILES={
-        [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
-        [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
-        [135002183282873]={type="lungehold",length=1.50,speed=1.00,triggerProgress=0.015,triggerTime=0.022},
-        [121216847022485]={type="attack",length=1.75,speed=1.00,triggerProgress=0.015,triggerTime=0.025},
-        [117042998468241]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
-        [133963973694098]={type="attack",length=1.72,speed=1.00,triggerProgress=0.016,triggerTime=0.025},
-        [110355011987939]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.012,triggerTime=0.012},
-        [139369275981139]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022},
-        [118907603246885]={type="lungehold",length=0.83,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
-        [78432063483146]={type="attack",length=1.72,speed=1.00,triggerProgress=0.018,triggerTime=0.025},
-        [122812055447896]={type="lungehold",length=0.75,speed=1.00,triggerProgress=0.010,triggerTime=0.008},
-        [78935059863801]={type="attack",length=1.63,speed=1.00,triggerProgress=0.016,triggerTime=0.022},
-        [129784271201071]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.015,triggerTime=0.015},
-        [132817836308238]={type="attack",length=1.72,speed=1.00,triggerProgress=0.017,triggerTime=0.025},
-        [105374834496520]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
-        [111920872708571]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022},
-        [115244153053858]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
-        [130593238885843]={type="attack",length=1.70,speed=1.00,triggerProgress=0.012,triggerTime=0.020}
+        [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
+        [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.010,triggerTime=0.012},
+        [135002183282873]={type="lungehold",length=1.50,speed=1.00,triggerProgress=0.008,triggerTime=0.012},
+        [121216847022485]={type="attack",length=1.75,speed=1.00,triggerProgress=0.009,triggerTime=0.012},
+        [117042998468241]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
+        [133963973694098]={type="attack",length=1.72,speed=1.00,triggerProgress=0.009,triggerTime=0.012},
+        [110355011987939]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.007,triggerTime=0.007},
+        [139369275981139]={type="attack",length=1.72,speed=1.00,triggerProgress=0.008,triggerTime=0.010},
+        [118907603246885]={type="lungehold",length=0.83,speed=1.00,triggerProgress=0.006,triggerTime=0.006},
+        [78432063483146]={type="attack",length=1.72,speed=1.00,triggerProgress=0.010,triggerTime=0.012},
+        [122812055447896]={type="lungehold",length=0.75,speed=1.00,triggerProgress=0.006,triggerTime=0.005},
+        [78935059863801]={type="attack",length=1.63,speed=1.00,triggerProgress=0.008,triggerTime=0.010},
+        [129784271201071]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.008,triggerTime=0.008},
+        [132817836308238]={type="attack",length=1.72,speed=1.00,triggerProgress=0.009,triggerTime=0.012},
+        [105374834496520]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.007,triggerTime=0.007},
+        [111920872708571]={type="attack",length=1.72,speed=1.00,triggerProgress=0.008,triggerTime=0.010},
+        [115244153053858]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.007,triggerTime=0.007},
+        [130593238885843]={type="attack",length=1.70,speed=1.00,triggerProgress=0.008,triggerTime=0.010}
     }
     local VALID_ANIM_IDS={}
     for id,profile in pairs(ATTACK_PROFILES) do
@@ -340,7 +340,7 @@ do
             if track and track.IsPlaying and track.Animation then
                 local id=getAnimNumericId(track.Animation.AnimationId)
                 if id==MASKED_WALK_ID then
-                    tracks[track]=true
+                    tracks[track]={lastPosition=track.TimePosition or 0,sawAdvance=false,armedBaseline=true}
                 end
             end
         end
@@ -358,11 +358,18 @@ do
         if seq.lungeTrack==track then return false end
         return true
     end
-    local function triggerMaskedSequence(char,seq,track)
+    local function triggerMaskedSequence(char,seq,track,reason)
         if not seq or seq.consumed or not seq.armed then return false end
-        if not maskedWalkIsNew(seq,track) then return false end
+        if not track then return false end
         local now=tick()
         if now<seq.armedAt or now>seq.expires then return false end
+        if reason=="new" then
+            if not maskedWalkIsNew(seq,track) then return false end
+        elseif reason=="reset" then
+            if seq.acceptedWalkTracks and seq.acceptedWalkTracks[track] then return false end
+        else
+            return false
+        end
         seq.acceptedWalkTracks=seq.acceptedWalkTracks or {}
         seq.acceptedWalkTracks[track]=true
         seq.walkTrack=track
@@ -400,7 +407,8 @@ do
                 walkSeen=false,
                 consumed=false,
                 baselineWalkTracks=baselineWalkTracks,
-                acceptedWalkTracks={}
+                acceptedWalkTracks={},
+                lastHeartbeat=tick()
             }
             STATE.maskedSequence[char]=seq
             STATE.maskedLungeArmed[char]=seq
@@ -409,7 +417,7 @@ do
         if numericId==MASKED_WALK_ID then
             local seq=STATE.maskedSequence[char]
             if seq then
-                triggerMaskedSequence(char,seq,track)
+                triggerMaskedSequence(char,seq,track,"new")
             end
             return
         end
@@ -441,12 +449,13 @@ do
     end
     local function maskedHeartbeatMonitor()
         if not STATE.autoParryEnabled then return end
+        local now=tick()
         for killerChar,seq in pairs(STATE.maskedSequence) do
             if not killerChar or not killerChar.Parent or not seq then
                 clearMaskedSequence(killerChar)
             elseif not seq.armed or seq.consumed then
                 clearMaskedSequence(killerChar)
-            elseif tick()>seq.expires then
+            elseif now>seq.expires then
                 clearMaskedSequence(killerChar)
             else
                 local humanoid=killerChar:FindFirstChildOfClass("Humanoid")
@@ -455,9 +464,26 @@ do
                     for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
                         if track and track.IsPlaying and track.Animation then
                             local id=getAnimNumericId(track.Animation.AnimationId)
-                            if id==MASKED_WALK_ID and maskedWalkIsNew(seq,track) then
-                                triggerMaskedSequence(killerChar,seq,track)
-                                if not STATE.maskedSequence[killerChar] then break end
+                            if id==MASKED_WALK_ID then
+                                if maskedWalkIsNew(seq,track) then
+                                    triggerMaskedSequence(killerChar,seq,track,"new")
+                                    if not STATE.maskedSequence[killerChar] then break end
+                                else
+                                    local base=seq.baselineWalkTracks and seq.baselineWalkTracks[track]
+                                    if base and not (seq.acceptedWalkTracks and seq.acceptedWalkTracks[track]) then
+                                        local pos=track.TimePosition or 0
+                                        local last=base.lastPosition or pos
+                                        if pos>0.15 then
+                                            base.sawAdvance=true
+                                        end
+                                        if base.sawAdvance and last-pos>=0.12 and pos<=0.16 then
+                                            base.resetDetected=true
+                                            triggerMaskedSequence(killerChar,seq,track,"reset")
+                                            if not STATE.maskedSequence[killerChar] then break end
+                                        end
+                                        base.lastPosition=pos
+                                    end
+                                end
                             end
                         end
                     end
@@ -709,8 +735,8 @@ do
                             local impactDistance=math.max(distance-attackReach,0)
                             local timeToImpact=math.huge
                             if closingSpeed>0 then timeToImpact=impactDistance/closingSpeed end
-                            lungeReady=closingSpeed>=5 and timeToImpact<=0.30
-                            critical=closingSpeed>=3.5 and timeToImpact<=0.15
+                            lungeReady=closingSpeed>=4 and timeToImpact<=0.28
+                            critical=closingSpeed>=3 and timeToImpact<=0.16
                         end
                         if animationReady or lungeReady or critical then
                             if canNormalAttackParry(killerChar,distance) then
@@ -722,7 +748,7 @@ do
                                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
                                     local predictedPos=killerRoot.Position+(flatVelocity*ping)
                                     local predictedDistance=(localRoot.Position-predictedPos).Magnitude
-                                    if predictedDistance<=STATE.autoParryRadius+2 then
+                                    if predictedDistance<=STATE.autoParryRadius+2.5 then
                                         if doParry(false,killerChar,distance) then data.consumed=true end
                                     end
                                 end
@@ -831,19 +857,19 @@ RunService.Heartbeat:Connect(function()
                     local timeToImpact=math.huge
                     if closingSpeed>0 then timeToImpact=impactDistance/closingSpeed end
                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-                    local predictedKiller=killerRoot.Position+killerFlatVelocity*(ping+0.045)
+                    local predictedKiller=killerRoot.Position+killerFlatVelocity*(ping+0.060)
                     local predictedLocal=localRoot.Position
                     local predictedDistance=(Vector3.new(predictedLocal.X,0,predictedLocal.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
                     local trigger=false
                     if distance<=HARD_CLOSE_RANGE then
                         trigger=true
-                    elseif closingSpeed>=2.5 and timeToImpact<=0.24 then
+                    elseif closingSpeed>=2.25 and timeToImpact<=0.26 then
                         trigger=true
-                    elseif closingSpeed>=5 and timeToImpact<=0.32 then
+                    elseif closingSpeed>=4.5 and timeToImpact<=0.34 then
                         trigger=true
-                    elseif predictedDistance<=STATE.autoParryRadius and closingSpeed>=2.5 then
+                    elseif predictedDistance<=STATE.autoParryRadius and closingSpeed>=2.25 then
                         trigger=true
-                    elseif animationStarted and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+1.75 then
+                    elseif animationStarted and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+2.5 then
                         trigger=true
                     end
                     if trigger and distance<=STATE.autoParryRadius then
