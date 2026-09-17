@@ -567,7 +567,7 @@ do
                 local profile=MASKED_EXTRA_ANIMS[numericId] or {type="maskedfast",length=1,speed=1}
                 registerMaskedFastAttack(char,currentName,track,profile,numericId)
                 if not STATE.killerCharacters[char] then
-                STATE.killerCharacters[char]={player=player,name=currentName}
+                    STATE.killerCharacters[char]={player=player,name=currentName}
                 end
                 return
             end
@@ -738,8 +738,7 @@ RegisterTask("AttackersMonitor",0,function()
                 end
             end
         end
-    end
-end)
+    end)
 
 RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then return end
