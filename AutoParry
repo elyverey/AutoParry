@@ -238,7 +238,7 @@ do
         local strictness=math.clamp(STATE.aimStrictness,-1,1)
         if strictness<=-1 then return -1 end
         local t=(strictness+1)/2
-        return 0.12+(t*0.18)
+        return 0.08+(t*0.14)
     end
     local function isFacingLocalPlayer(killerChar)
         if STATE.aimStrictness<=-1 then return true end
@@ -340,7 +340,6 @@ do
     local function maskedWalkIsNew(seq,track)
         if not seq or not track then return false end
         if seq.consumed or not seq.armed then return false end
-        if seq.baselineWalkTracks and seq.baselineWalkTracks[track] then return false end
         if seq.acceptedWalkTracks and seq.acceptedWalkTracks[track] then return false end
         if seq.lungeTrack==track then return false end
         return true
@@ -361,7 +360,7 @@ do
     local function registerMaskedSpecial(char,kName,track,profile,animId)
         if STATE.ignoredTheMaskedDuck then return end
         local data={
-            name=kName or "The Masked (Duck)",
+            name=kName or "The Masked",
             track=track,
             type="maskedspecial",
             started=tick(),
@@ -370,6 +369,18 @@ do
             profile=profile
         }
         STATE.activeMaskedSkillAttackers[char]=data
+        local seq=STATE.maskedSequence[char]
+        if seq and seq.armed and seq.prepared and not seq.consumed and tick()<=seq.expires then
+            local distance=getSkillDistance(char)
+            if distance<=MASKED_SPECIAL_RANGE then
+                if doSkillParry() then
+                    data.consumed=true
+                    seq.consumed=true
+                    clearMaskedSequence(char)
+                    return
+                end
+            end
+        end
         local conn
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
@@ -391,9 +402,14 @@ do
                 if existing.lungeTrack~=track then
                     existing.lungeTrack=track
                 end
+                local currentWalkTracks=getMaskedWalkTracks(char)
+                for walkTrack in pairs(currentWalkTracks) do
+                    registerMaskedWalkPreparation(char,existing,walkTrack)
+                    break
+                end
                 return
             end
-            local baselineWalkTracks=getMaskedWalkTracks(char)
+            local baselineWalkTracks={}
             local seq={
                 armed=true,
                 armedAt=now,
@@ -409,6 +425,11 @@ do
             }
             STATE.maskedSequence[char]=seq
             STATE.maskedLungeArmed[char]=seq
+            local currentWalkTracks=getMaskedWalkTracks(char)
+            for walkTrack in pairs(currentWalkTracks) do
+                registerMaskedWalkPreparation(char,seq,walkTrack)
+                break
+            end
             return
         end
         if numericId==MASKED_WALK_ID then
@@ -437,9 +458,24 @@ do
                     for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
                         if track and track.IsPlaying and track.Animation then
                             local id=getAnimNumericId(track.Animation.AnimationId)
-                            if id==MASKED_WALK_ID and maskedWalkIsNew(seq,track) then
+                            if id==MASKED_WALK_ID then
                                 registerMaskedWalkPreparation(killerChar,seq,track)
                             end
+                        end
+                    end
+                end
+            end
+        end
+        for killerChar,data in pairs(STATE.activeMaskedSkillAttackers) do
+            if killerChar and killerChar.Parent and data and not data.consumed and data.type=="maskedspecial" then
+                local seq=STATE.maskedSequence[killerChar]
+                if seq and seq.armed and seq.prepared and not seq.consumed and tick()<=seq.expires then
+                    local distance=getSkillDistance(killerChar)
+                    if distance<=MASKED_SPECIAL_RANGE then
+                        if doSkillParry() then
+                            data.consumed=true
+                            seq.consumed=true
+                            clearMaskedSequence(killerChar)
                         end
                     end
                 end
@@ -531,7 +567,7 @@ do
                 local profile=MASKED_EXTRA_ANIMS[numericId] or {type="maskedfast",length=1,speed=1}
                 registerMaskedFastAttack(char,currentName,track,profile,numericId)
                 if not STATE.killerCharacters[char] then
-                    STATE.killerCharacters[char]={player=player,name=currentName}
+                STATE.killerCharacters[char]={player=player,name=currentName}
                 end
                 return
             end
@@ -617,7 +653,7 @@ do
                     end
                     if shouldEmergency then
                         local data=STATE.activeAttackers[killerChar]
-                        if data and not data.consumed then
+                        if data and not data.consumed and canNormalAttackParry(killerChar,distance) then
                             if doParry(true,killerChar,distance) then data.consumed=true end
                         end
                     end
@@ -625,7 +661,8 @@ do
             end
         end
     end)
-    RegisterTask("AttackersMonitor",0,function()
+
+RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
         for killerChar,data in pairs(STATE.activeAttackers) do
@@ -658,7 +695,9 @@ do
                         if timeToImpact<=EMERGENCY_TIME then emergency=true end
                     end
                     if emergency then
-                        if doParry(true,killerChar,distance) then data.consumed=true end
+                        if canNormalAttackParry(killerChar,distance) then
+                            if doParry(true,killerChar,distance) then data.consumed=true end
+                        end
                     else
                         local position=data.track.TimePosition or 0
                         local realLength=data.track.Length
@@ -699,8 +738,10 @@ do
                 end
             end
         end
-    end)
-    RunService.Heartbeat:Connect(function()
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then return end
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
@@ -764,7 +805,7 @@ do
                     local distance=flatOffset.Magnitude
                     if data.type=="maskedspecial" and distance<=MASKED_SPECIAL_RANGE then
                         local seq=STATE.maskedSequence[killerChar]
-                        local prepared=seq and seq.armed and seq.prepared and not seq.consumed
+                        local prepared=seq and seq.armed and seq.prepared and not seq.consumed and tick()<=seq.expires
                         if prepared then
                             if doSkillParry() then
                                 data.consumed=true
