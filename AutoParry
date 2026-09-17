@@ -27,8 +27,8 @@ do
     local HIDDEN_SPEED=13.8
     local HIDDEN_PREDICT_TIME=0.08
     local ABYSSWALKER_RANGE=12.5
-    local MASKED_RANGE=7.4
-    local MASKED_SPECIAL_RANGE=7.4
+    local MASKED_RANGE=6.5
+    local MASKED_SPECIAL_RANGE=6.5
     local MASKED_CLOSE_RANGE=3.0
     local MASKED_SEQUENCE_TIME=2.25
     local MASKED_LUNGEHOLD_ID=117070354890871
@@ -49,8 +49,9 @@ do
     local EMERGENCY_TIME=0.18
     local VAULT_EXTRA_RANGE=2.25
     local EDGE_TOLERANCE=1.0
-    local EARLY_TRIGGER_TIME=0.010
-    local EARLY_TRIGGER_PROGRESS=0.006
+    local EARLY_TRIGGER_TIME=0.006
+    local EARLY_TRIGGER_PROGRESS=0.004
+    local ATTACK_TRIGGER_GRACE=0.18
     local ATTACK_PROFILES={
         [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
         [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
@@ -69,7 +70,8 @@ do
         [105374834496520]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
         [111920872708571]={type="attack",length=1.72,speed=1.00,triggerProgress=0.014,triggerTime=0.022},
         [115244153053858]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.010,triggerTime=0.010},
-        [130593238885843]={type="attack",length=1.70,speed=1.00,triggerProgress=0.012,triggerTime=0.020}
+        [130593238885843]={type="attack",length=1.70,speed=1.00,triggerProgress=0.012,triggerTime=0.020},
+        [138720291317243]={type="attack",length=1.72,speed=1.00,triggerProgress=0.12,triggerTime=0.12}
     }
     local function getAnimNumericId(animId)
         if typeof(animId)~="string" then return nil end
@@ -238,7 +240,7 @@ do
         local strictness=math.clamp(STATE.aimStrictness,-1,1)
         if strictness<=-1 then return -1 end
         local t=(strictness+1)/2
-        return 0.08+(t*0.14)
+        return 0.05+(t*0.12)
     end
     local function isFacingLocalPlayer(killerChar)
         if STATE.aimStrictness<=-1 then return true end
@@ -661,8 +663,7 @@ do
             end
         end
     end)
-
-RegisterTask("AttackersMonitor",0,function()
+    RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
         for killerChar,data in pairs(STATE.activeAttackers) do
@@ -708,6 +709,10 @@ RegisterTask("AttackersMonitor",0,function()
                         local triggerTime=(profile.triggerTime or 0)/speed
                         local triggerProgress=profile.triggerProgress or 0
                         local animationReady=position>=triggerTime or progress>=triggerProgress
+                        local attackWindowOpen=true
+                        if profile.type=="attack" then
+                            attackWindowOpen=position<=triggerTime+ATTACK_TRIGGER_GRACE
+                        end
                         local lungeReady=false
                         local critical=false
                         if profile.type=="lungehold" then
@@ -718,7 +723,7 @@ RegisterTask("AttackersMonitor",0,function()
                             lungeReady=closingSpeed>=5 and timeToImpact<=0.30
                             critical=closingSpeed>=3.5 and timeToImpact<=0.15
                         end
-                        if animationReady or lungeReady or critical then
+                        if (animationReady and attackWindowOpen) or lungeReady or critical then
                             if canNormalAttackParry(killerChar,distance) then
                                 local movingCorrectly=true
                                 if flatOffset.Magnitude>0 and flatVelocity.Magnitude>8 then
@@ -856,6 +861,10 @@ RunService.Heartbeat:Connect(function()
                         local triggerTime=(data.profile.triggerTime or 0)/speed
                         local triggerProgress=data.profile.triggerProgress or 0
                         local animationReady=position>=triggerTime or progress>=triggerProgress
+                        local attackWindowOpen=true
+                        if data.profile.type=="attack" then
+                            attackWindowOpen=position<=triggerTime+ATTACK_TRIGGER_GRACE
+                        end
                         local lungeReady=false
                         local critical=false
                         if data.profile.type=="lungehold" then
@@ -866,7 +875,7 @@ RunService.Heartbeat:Connect(function()
                             lungeReady=closingSpeed>=5 and timeToImpact<=0.30
                             critical=closingSpeed>=3.5 and timeToImpact<=0.15
                         end
-                        if animationReady or lungeReady or critical then
+                        if (animationReady and attackWindowOpen) or lungeReady or critical then
                             if canNormalAttackParry(killerChar,distance) then
                                 local movingCorrectly=true
                                 if flatOffset.Magnitude>0 and killerFlatVelocity.Magnitude>5 then
@@ -874,7 +883,7 @@ RunService.Heartbeat:Connect(function()
                                 end
                                 if movingCorrectly then
                                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-                                    local predictedKiller=killerRoot.Position+killerFlatVelocity*(ping+0.045)
+                                    local predictedKiller=killerRoot.Position+killerFlatVelocity*(ping+0.020)
                                     local predictedDistance=(Vector3.new(localRoot.Position.X,0,localRoot.Position.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
                                     local trigger=false
                                     if distance<=HARD_CLOSE_RANGE then
@@ -885,7 +894,7 @@ RunService.Heartbeat:Connect(function()
                                         trigger=true
                                     elseif predictedDistance<=STATE.autoParryRadius and closingSpeed>=2.5 then
                                         trigger=true
-                                    elseif animationReady and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+1.75 then
+                                    elseif animationReady and attackWindowOpen and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+1.75 then
                                         trigger=true
                                     end
                                     if trigger and distance<=STATE.autoParryRadius then
