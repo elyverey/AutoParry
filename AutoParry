@@ -27,10 +27,9 @@ do
     local HIDDEN_SPEED=13.8
     local HIDDEN_PREDICT_TIME=0.08
     local ABYSSWALKER_RANGE=12.5
-    local MASKED_RANGE=6.5
-    local MASKED_SPECIAL_RANGE=6.5
-    local MASKED_CLOSE_RANGE=3.0
-    local MASKED_SEQUENCE_TIME=2.25
+
+    -- THE MASKED ONLY
+    local MASKED_RANGE=10.5
     local MASKED_LUNGEHOLD_ID=117070354890871
     local MASKED_WALK_ID=111229698330816
     local MASKED_ATTACK_ID=106871536134254
@@ -43,15 +42,21 @@ do
         [109402730355822]={type="maskedattackdone",length=2.95,speed=1.00},
         [110360975271091]={type="maskedspecial",length=4.00,speed=1.00}
     }
+    local MASKED_LUNGE_START=1.680
+    local MASKED_LUNGE_END=1.900
+
     local CLOSE_RANGE=4.5
     local HARD_CLOSE_RANGE=2.75
     local MIN_CLOSING_SPEED=2
     local EMERGENCY_TIME=0.18
     local VAULT_EXTRA_RANGE=2.25
     local EDGE_TOLERANCE=1.0
-    local EARLY_TRIGGER_TIME=0.006
-    local EARLY_TRIGGER_PROGRESS=0.004
+
+    -- Faster normal Auto Parry Heartbeat
+    local EARLY_TRIGGER_TIME=0.010
+    local EARLY_TRIGGER_PROGRESS=0.006
     local ATTACK_TRIGGER_GRACE=0.18
+
     local ATTACK_PROFILES={
         [113255068724446]={type="lungehold",length=1.00,speed=1.00,triggerProgress=0.018,triggerTime=0.018},
         [74968262036854]={type="attack",length=1.70,speed=1.00,triggerProgress=0.018,triggerTime=0.030},
@@ -73,10 +78,12 @@ do
         [130593238885843]={type="attack",length=1.70,speed=1.00,triggerProgress=0.012,triggerTime=0.020},
         [138720291317243]={type="attack",length=1.72,speed=1.00,triggerProgress=0.12,triggerTime=0.12}
     }
+
     local function getAnimNumericId(animId)
         if typeof(animId)~="string" then return nil end
         return tonumber(animId:match("%d+"))
     end
+
     local function getKillerName(player,char)
         if not player or not char then return nil end
         local values=char:FindFirstChild("Values")
@@ -90,6 +97,7 @@ do
         if typeof(attr)=="string" and attr~="" then return attr end
         return nil
     end
+
     local function isKillerTeam(player)
         if not player then return false end
         local team=player.Team
@@ -98,6 +106,7 @@ do
         if typeof(teamName)~="string" then return false end
         return teamName:lower():find("killer")~=nil
     end
+
     local function sendParryInput()
         local char=localPlayer.Character
         if not char then return end
@@ -127,15 +136,19 @@ do
         local root=char:FindFirstChild("HumanoidRootPart")
         if root then
             pcall(function()
-                if CollectionService:HasTag(root,"doing action") then CollectionService:RemoveTag(root,"doing action") end
+                if CollectionService:HasTag(root,"doing action") then
+                    CollectionService:RemoveTag(root,"doing action")
+                end
             end)
         end
     end
+
     local function parryInputAvailable(now)
         if now-STATE.lastParryTime<0.01 then return false end
         if now-STATE.lastSkillParryTime<0.01 then return false end
         return true
     end
+
     local function doParry(force,killerChar,distance)
         if not STATE.autoParryEnabled then return false end
         local now=tick()
@@ -144,7 +157,9 @@ do
             local allowedRange=STATE.autoParryRadius
             local allowVault=false
             local data=STATE.activeAttackers[killerChar]
-            if data and data.profile and data.profile.type=="lungehold" then allowVault=true end
+            if data and data.profile and data.profile.type=="lungehold" then
+                allowVault=true
+            end
             if distance>allowedRange then return false end
             local localChar=localPlayer.Character
             local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
@@ -190,7 +205,9 @@ do
                     local hit=result.Instance
                     if hit then
                         local n=hit.Name:lower()
-                        if n:find("vault") or n:find("window") or n:find("ledge") then vaultHit=true end
+                        if n:find("vault") or n:find("window") or n:find("ledge") then
+                            vaultHit=true
+                        end
                     end
                 end
             end
@@ -210,6 +227,7 @@ do
         sendParryInput()
         return true
     end
+
     local function doSkillParry()
         if not STATE.autoParryEnabled then return false end
         local now=tick()
@@ -219,14 +237,20 @@ do
         sendParryInput()
         return true
     end
+
     local function isIgnoredSkillKiller(killerName)
         if typeof(killerName)~="string" then return false end
         local name=killerName:lower()
-        if name=="the hidden" then return STATE.ignoredTheHidden
-        elseif name=="the abysswalker" then return STATE.ignoredTheAbysswalker
-        elseif name=="the masked (duck)" or name=="the masked" then return STATE.ignoredTheMaskedDuck end
+        if name=="the hidden" then
+            return STATE.ignoredTheHidden
+        elseif name=="the abysswalker" then
+            return STATE.ignoredTheAbysswalker
+        elseif name=="the masked (duck)" or name=="the masked" then
+            return STATE.ignoredTheMaskedDuck
+        end
         return false
     end
+
     local function getSkillDistance(char)
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
@@ -236,12 +260,14 @@ do
         local b=killerRoot.Position
         return (Vector3.new(a.X,0,a.Z)-Vector3.new(b.X,0,b.Z)).Magnitude
     end
+
     local function getFaceKillerThreshold()
         local strictness=math.clamp(STATE.aimStrictness,-1,1)
         if strictness<=-1 then return -1 end
         local t=(strictness+1)/2
-        return 0.05+(t*0.12)
+        return 0.04+(t*0.10)
     end
+
     local function isFacingLocalPlayer(killerChar)
         if STATE.aimStrictness<=-1 then return true end
         local localChar=localPlayer.Character
@@ -265,6 +291,7 @@ do
         end
         return false
     end
+
     local function canNormalAttackParry(killerChar,distance)
         if distance>STATE.autoParryRadius then return false end
         if STATE.aimStrictness<=-1 then return true end
@@ -278,16 +305,21 @@ do
         if flatDirection.Magnitude<=2.0 then return true end
         return false
     end
+
     local function tryHiddenParry(char,data)
         if data.consumed or not STATE.autoParryEnabled then return false end
         if isIgnoredSkillKiller(data.name) then return false end
         if typeof(data.name)~="string" or data.name:lower()~="the hidden" then return false end
         local distance=getSkillDistance(char)
         if distance<=HIDDEN_RANGE then
-            if doSkillParry() then data.consumed=true return true end
+            if doSkillParry() then
+                data.consumed=true
+                return true
+            end
         end
         return false
     end
+
     local function registerSkillAttack(char,kName,track)
         if typeof(kName)~="string" or kName:lower()~="the hidden" then return end
         if isIgnoredSkillKiller(kName) then return end
@@ -304,6 +336,7 @@ do
         end)
         tryHiddenParry(char,data)
     end
+
     local function registerAbysswalkerAttack(char,kName,track)
         if STATE.ignoredTheAbysswalker then return end
         local data={name=kName or "The Abysswalker",track=track,type="abysswalker",started=tick(),consumed=false,skillId=ABYSSWALKER_ANIM_ID}
@@ -322,168 +355,80 @@ do
             if doSkillParry() then data.consumed=true end
         end
     end
-    local function getMaskedWalkTracks(char)
-        local tracks={}
-        local humanoid=char and char:FindFirstChildOfClass("Humanoid")
-        local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
-        if not animator then return tracks end
-        for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
-            if track and track.IsPlaying and track.Animation then
-                local id=getAnimNumericId(track.Animation.AnimationId)
-                if id==MASKED_WALK_ID then tracks[track]=true end
-            end
-        end
-        return tracks
-    end
+
+    -- THE MASKED:
+    -- Only LungeHoldAlex is a trigger.
+    -- Walk/Attack/AttackDone/Idle are ignored completely.
     local function clearMaskedSequence(char)
         STATE.maskedSequence[char]=nil
         STATE.maskedLungeArmed[char]=nil
     end
-    local function maskedWalkIsNew(seq,track)
-        if not seq or not track then return false end
-        if seq.consumed or not seq.armed then return false end
-        if seq.acceptedWalkTracks and seq.acceptedWalkTracks[track] then return false end
-        if seq.lungeTrack==track then return false end
-        return true
-    end
-    local function registerMaskedWalkPreparation(char,seq,track)
-        if not seq or seq.consumed or not seq.armed then return false end
-        if not maskedWalkIsNew(seq,track) then return false end
-        local now=tick()
-        if now<seq.armedAt or now>seq.expires then return false end
-        seq.acceptedWalkTracks=seq.acceptedWalkTracks or {}
-        seq.acceptedWalkTracks[track]=true
-        seq.walkTrack=track
-        seq.walkStarted=now
-        seq.walkSeen=true
-        seq.prepared=true
-        return true
-    end
-    local function registerMaskedSpecial(char,kName,track,profile,animId)
+
+    local function registerMaskedLunge(char,kName,track)
         if STATE.ignoredTheMaskedDuck then return end
-        local data={
-            name=kName or "The Masked",
+        if not track or not track.Animation then return end
+        local now=tick()
+        local old=STATE.maskedSequence[char]
+        if old and old.track==track and not old.consumed then return end
+
+        local seq={
+            armed=true,
             track=track,
-            type="maskedspecial",
-            started=tick(),
+            started=now,
             consumed=false,
-            id=animId,
-            profile=profile
+            lastTimePosition=-1
         }
-        STATE.activeMaskedSkillAttackers[char]=data
-        local seq=STATE.maskedSequence[char]
-        if seq and seq.armed and seq.prepared and not seq.consumed and tick()<=seq.expires then
-            local distance=getSkillDistance(char)
-            if distance<=MASKED_SPECIAL_RANGE then
-                if doSkillParry() then
-                    data.consumed=true
-                    seq.consumed=true
-                    clearMaskedSequence(char)
-                    return
-                end
-            end
-        end
+        STATE.maskedSequence[char]=seq
+        STATE.maskedLungeArmed[char]=seq
+
         local conn
         conn=track.Stopped:Connect(function()
             if conn then conn:Disconnect() end
             task.defer(function()
-                if STATE.activeMaskedSkillAttackers[char] and STATE.activeMaskedSkillAttackers[char].track==track then
-                    STATE.activeMaskedSkillAttackers[char]=nil
+                local current=STATE.maskedSequence[char]
+                if current and current.track==track and not current.consumed then
+                    STATE.maskedSequence[char]=nil
+                    STATE.maskedLungeArmed[char]=nil
                 end
             end)
         end)
     end
-    local function registerMaskedFastAttack(char,kName,track,profile,animId)
-        if STATE.ignoredTheMaskedDuck then return end
-        local numericId=typeof(animId)=="number" and animId or getAnimNumericId(track.Animation and track.Animation.AnimationId)
-        if not numericId then return end
-        if numericId==MASKED_LUNGEHOLD_ID then
-            local now=tick()
-            local existing=STATE.maskedSequence[char]
-            if existing and existing.armed and not existing.consumed and now<=existing.expires then
-                if existing.lungeTrack~=track then
-                    existing.lungeTrack=track
-                end
-                local currentWalkTracks=getMaskedWalkTracks(char)
-                for walkTrack in pairs(currentWalkTracks) do
-                    registerMaskedWalkPreparation(char,existing,walkTrack)
-                    break
-                end
-                return
-            end
-            local baselineWalkTracks={}
-            local seq={
-                armed=true,
-                armedAt=now,
-                expires=now+MASKED_SEQUENCE_TIME,
-                lungeTrack=track,
-                walkTrack=nil,
-                walkStarted=nil,
-                walkSeen=false,
-                prepared=false,
-                consumed=false,
-                baselineWalkTracks=baselineWalkTracks,
-                acceptedWalkTracks={}
-            }
-            STATE.maskedSequence[char]=seq
-            STATE.maskedLungeArmed[char]=seq
-            local currentWalkTracks=getMaskedWalkTracks(char)
-            for walkTrack in pairs(currentWalkTracks) do
-                registerMaskedWalkPreparation(char,seq,walkTrack)
-                break
-            end
-            return
-        end
-        if numericId==MASKED_WALK_ID then
-            local seq=STATE.maskedSequence[char]
-            if seq then registerMaskedWalkPreparation(char,seq,track) end
-            return
-        end
-        if numericId==MASKED_ATTACK_ID or numericId==MASKED_ATTACKDONE_ID then return end
-        if MASKED_SPECIAL_IDS[numericId] then
-            registerMaskedSpecial(char,kName,track,profile,numericId)
-        end
-    end
+
     local function maskedHeartbeatMonitor()
         if not STATE.autoParryEnabled then return end
+        local now=tick()
         for killerChar,seq in pairs(STATE.maskedSequence) do
             if not killerChar or not killerChar.Parent or not seq then
                 clearMaskedSequence(killerChar)
-            elseif not seq.armed or seq.consumed then
+            elseif STATE.ignoredTheMaskedDuck then
                 clearMaskedSequence(killerChar)
-            elseif tick()>seq.expires then
+            elseif seq.consumed then
+                clearMaskedSequence(killerChar)
+            elseif not seq.track or not seq.track.Parent then
                 clearMaskedSequence(killerChar)
             else
-                local humanoid=killerChar:FindFirstChildOfClass("Humanoid")
-                local animator=humanoid and humanoid:FindFirstChildOfClass("Animator")
-                if animator then
-                    for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
-                        if track and track.IsPlaying and track.Animation then
-                            local id=getAnimNumericId(track.Animation.AnimationId)
-                            if id==MASKED_WALK_ID then
-                                registerMaskedWalkPreparation(killerChar,seq,track)
+                local track=seq.track
+                if not track.IsPlaying then
+                    clearMaskedSequence(killerChar)
+                else
+                    local position=track.TimePosition or 0
+                    seq.lastTimePosition=position
+
+                    -- Track from animation start, but parry only inside this TP window.
+                    if position>=MASKED_LUNGE_START and position<=MASKED_LUNGE_END then
+                        local distance=getSkillDistance(killerChar)
+                        if distance<=MASKED_RANGE then
+                            if doSkillParry() then
+                                seq.consumed=true
+                                clearMaskedSequence(killerChar)
                             end
                         end
                     end
                 end
             end
         end
-        for killerChar,data in pairs(STATE.activeMaskedSkillAttackers) do
-            if killerChar and killerChar.Parent and data and not data.consumed and data.type=="maskedspecial" then
-                local seq=STATE.maskedSequence[killerChar]
-                if seq and seq.armed and seq.prepared and not seq.consumed and tick()<=seq.expires then
-                    local distance=getSkillDistance(killerChar)
-                    if distance<=MASKED_SPECIAL_RANGE then
-                        if doSkillParry() then
-                            data.consumed=true
-                            seq.consumed=true
-                            clearMaskedSequence(killerChar)
-                        end
-                    end
-                end
-            end
-        end
     end
+
     local boundCharacters={}
     local function cleanupCharacter(char)
         boundCharacters[char]=nil
@@ -494,11 +439,13 @@ do
         STATE.maskedLungeArmed[char]=nil
         STATE.maskedSequence[char]=nil
     end
+
     local function OnParryCharacterAdded(player,char)
         if not player or not char then return end
         if player==localPlayer then return end
         if boundCharacters[char] then return end
         boundCharacters[char]=true
+
         local kName=getKillerName(player,char) or "Unknown Killer"
         local function resolveKiller()
             if not char.Parent then return false end
@@ -520,7 +467,9 @@ do
                     STATE.killerCharacters[char]={player=player,name=kName}
                 else
                     known.player=player
-                    if known.name==nil or known.name=="" or known.name=="Unknown Killer" then known.name=kName end
+                    if known.name==nil or known.name=="" or known.name=="Unknown Killer" then
+                        known.name=kName
+                    end
                 end
                 return true
             end
@@ -530,10 +479,13 @@ do
             end
             return false
         end
+
         resolveKiller()
+
         char.AncestryChanged:Connect(function(_,parent)
             if not parent then cleanupCharacter(char) end
         end)
+
         task.spawn(function()
             for _=1,12 do
                 if not char.Parent then return end
@@ -541,16 +493,20 @@ do
                 task.wait(0.5)
             end
         end)
+
         local humanoid=char:WaitForChild("Humanoid",3)
         if not humanoid then return end
         local animator=humanoid:WaitForChild("Animator",3)
         if not animator then return end
+
         animator.AnimationPlayed:Connect(function(track)
             if not STATE.autoParryEnabled then return end
             if not track or not track.Animation then return end
+
             local animId=track.Animation.AnimationId
             local numericId=getAnimNumericId(animId)
             if not numericId then return end
+
             local detectedName=getKillerName(player,char)
             if detectedName then
                 kName=detectedName
@@ -564,32 +520,51 @@ do
                 local known=STATE.killerCharacters[char]
                 if known and known.name then kName=known.name end
             end
+
             local currentName=kName or "Unknown Killer"
-            if numericId==MASKED_LUNGEHOLD_ID or numericId==MASKED_WALK_ID or numericId==MASKED_ATTACK_ID or numericId==MASKED_ATTACKDONE_ID or MASKED_SPECIAL_IDS[numericId] then
-                local profile=MASKED_EXTRA_ANIMS[numericId] or {type="maskedfast",length=1,speed=1}
-                registerMaskedFastAttack(char,currentName,track,profile,numericId)
+
+            -- THE MASKED ONLY:
+            -- LungeHoldAlex starts the Masked detector.
+            -- Every other Masked animation is ignored and never becomes a trigger.
+            if numericId==MASKED_LUNGEHOLD_ID then
+                if currentName:lower()=="the masked (duck)" or currentName:lower()=="the masked" then
+                    registerMaskedLunge(char,currentName,track)
+                    if not STATE.killerCharacters[char] then
+                        STATE.killerCharacters[char]={player=player,name=currentName}
+                    end
+                end
+                return
+            end
+
+            if numericId==MASKED_WALK_ID or numericId==MASKED_ATTACK_ID or numericId==MASKED_ATTACKDONE_ID or MASKED_SPECIAL_IDS[numericId] then
+                return
+            end
+
+            if numericId==SKILL_ANIM_ID then
+                if currentName:lower()=="the hidden" then
+                    registerSkillAttack(char,currentName,track)
+                end
+                return
+            end
+
+            if numericId==ABYSSWALKER_ANIM_ID then
+                registerAbysswalkerAttack(char,currentName,track)
                 if not STATE.killerCharacters[char] then
                     STATE.killerCharacters[char]={player=player,name=currentName}
                 end
                 return
             end
-            if numericId==SKILL_ANIM_ID then
-                if currentName:lower()=="the hidden" then registerSkillAttack(char,currentName,track) end
-                return
-            end
-            if numericId==ABYSSWALKER_ANIM_ID then
-                registerAbysswalkerAttack(char,currentName,track)
-                if not STATE.killerCharacters[char] then STATE.killerCharacters[char]={player=player,name=currentName} end
-                return
-            end
+
             local profile=ATTACK_PROFILES[numericId]
             if not profile then return end
+
             local known=STATE.killerCharacters[char]
             if not known then
                 STATE.killerCharacters[char]={player=player,name=currentName}
             elseif currentName~="Unknown Killer" then
                 known.name=currentName
             end
+
             local data={
                 name=currentName,
                 track=track,
@@ -601,6 +576,7 @@ do
                 lastTimePosition=-1
             }
             STATE.activeAttackers[char]=data
+
             local conn
             conn=track.Stopped:Connect(function()
                 if conn then conn:Disconnect() end
@@ -612,22 +588,32 @@ do
             end)
         end)
     end
+
     local function OnParryPlayerAdded(player)
         if player==localPlayer then return end
         if player.Character then
-            task.spawn(function() OnParryCharacterAdded(player,player.Character) end)
+            task.spawn(function()
+                OnParryCharacterAdded(player,player.Character)
+            end)
         end
         player.CharacterAdded:Connect(function(char)
-            task.spawn(function() OnParryCharacterAdded(player,char) end)
+            task.spawn(function()
+                OnParryCharacterAdded(player,char)
+            end)
         end)
     end
-    for _,player in ipairs(Players:GetPlayers()) do OnParryPlayerAdded(player) end
+
+    for _,player in ipairs(Players:GetPlayers()) do
+        OnParryPlayerAdded(player)
+    end
     Players.PlayerAdded:Connect(OnParryPlayerAdded)
+
     RegisterTask("CloseRangeMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         if not localRoot then return end
+
         for killerChar,killerData in pairs(STATE.killerCharacters) do
             if not killerChar or not killerChar.Parent then
                 STATE.killerCharacters[killerChar]=nil
@@ -641,7 +627,9 @@ do
                     local localVelocity=localRoot.AssemblyLinearVelocity
                     local relativeVelocity=Vector3.new(killerVelocity.X-localVelocity.X,0,killerVelocity.Z-localVelocity.Z)
                     local closingSpeed=0
-                    if distance>0 then closingSpeed=relativeVelocity:Dot(flatOffset.Unit) end
+                    if distance>0 then
+                        closingSpeed=relativeVelocity:Dot(flatOffset.Unit)
+                    end
                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
                     local predictedKiller=killerRoot.Position+Vector3.new(killerVelocity.X,0,killerVelocity.Z)*ping
                     local predictedLocal=localRoot.Position+Vector3.new(localVelocity.X,0,localVelocity.Z)*ping
@@ -651,21 +639,27 @@ do
                         shouldEmergency=true
                     elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
                         local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=EMERGENCY_TIME or predictedDistance<=3.75 then shouldEmergency=true end
+                        if timeToImpact<=EMERGENCY_TIME or predictedDistance<=3.75 then
+                            shouldEmergency=true
+                        end
                     end
                     if shouldEmergency then
                         local data=STATE.activeAttackers[killerChar]
                         if data and not data.consumed and canNormalAttackParry(killerChar,distance) then
-                            if doParry(true,killerChar,distance) then data.consumed=true end
+                            if doParry(true,killerChar,distance) then
+                                data.consumed=true
+                            end
                         end
                     end
                 end
             end
         end
     end)
-    RegisterTask("AttackersMonitor",0,function()
+
+RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled then return end
         if next(STATE.activeAttackers)==nil then return end
+
         for killerChar,data in pairs(STATE.activeAttackers) do
             if not killerChar or not killerChar.Parent or not data.track then
                 STATE.activeAttackers[killerChar]=nil
@@ -676,6 +670,7 @@ do
                 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
                 local localChar=localPlayer.Character
                 local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+
                 if killerRoot and localRoot and profile then
                     local offset=localRoot.Position-killerRoot.Position
                     local distance=offset.Magnitude
@@ -685,19 +680,26 @@ do
                     local flatLocalVelocity=Vector3.new(localVelocity.X,0,localVelocity.Z)
                     local flatOffset=Vector3.new(offset.X,0,offset.Z)
                     local closingSpeed=0
+
                     if flatOffset.Magnitude>0 then
                         closingSpeed=Vector3.new(flatVelocity.X-flatLocalVelocity.X,0,flatVelocity.Z-flatLocalVelocity.Z):Dot(flatOffset.Unit)
                     end
+
                     local emergency=false
                     if distance<=HARD_CLOSE_RANGE then
                         emergency=true
                     elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
                         local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=EMERGENCY_TIME then emergency=true end
+                        if timeToImpact<=EMERGENCY_TIME then
+                            emergency=true
+                        end
                     end
+
                     if emergency then
                         if canNormalAttackParry(killerChar,distance) then
-                            if doParry(true,killerChar,distance) then data.consumed=true end
+                            if doParry(true,killerChar,distance) then
+                                data.consumed=true
+                            end
                         end
                     else
                         local position=data.track.TimePosition or 0
@@ -708,21 +710,30 @@ do
                         local progress=length>0 and normalizedTime/length or 0
                         local triggerTime=(profile.triggerTime or 0)/speed
                         local triggerProgress=profile.triggerProgress or 0
-                        local animationReady=position>=triggerTime or progress>=triggerProgress
+
+                        local earlyTriggerTime=math.max(triggerTime-EARLY_TRIGGER_TIME,0)
+                        local earlyTriggerProgress=math.max(triggerProgress-EARLY_TRIGGER_PROGRESS,0)
+                        local animationReady=position>=earlyTriggerTime or progress>=earlyTriggerProgress
+
                         local attackWindowOpen=true
                         if profile.type=="attack" then
                             attackWindowOpen=position<=triggerTime+ATTACK_TRIGGER_GRACE
                         end
+
                         local lungeReady=false
                         local critical=false
+
                         if profile.type=="lungehold" then
                             local attackReach=3.5
                             local impactDistance=math.max(distance-attackReach,0)
                             local timeToImpact=math.huge
-                            if closingSpeed>0 then timeToImpact=impactDistance/closingSpeed end
+                            if closingSpeed>0 then
+                                timeToImpact=impactDistance/closingSpeed
+                            end
                             lungeReady=closingSpeed>=5 and timeToImpact<=0.30
                             critical=closingSpeed>=3.5 and timeToImpact<=0.15
                         end
+
                         if (animationReady and attackWindowOpen) or lungeReady or critical then
                             if canNormalAttackParry(killerChar,distance) then
                                 local movingCorrectly=true
@@ -734,7 +745,9 @@ do
                                     local predictedPos=killerRoot.Position+(flatVelocity*ping)
                                     local predictedDistance=(localRoot.Position-predictedPos).Magnitude
                                     if predictedDistance<=STATE.autoParryRadius+2 then
-                                        if doParry(false,killerChar,distance) then data.consumed=true end
+                                        if doParry(false,killerChar,distance) then
+                                            data.consumed=true
+                                        end
                                     end
                                 end
                             end
@@ -750,7 +763,9 @@ RunService.Heartbeat:Connect(function()
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         if not localRoot then return end
+
         local localPos=localRoot.Position
+
         for killerChar,data in pairs(STATE.activeSkillAttackers) do
             if not killerChar or not killerChar.Parent or not data or not data.track then
                 STATE.activeSkillAttackers[killerChar]=nil
@@ -764,8 +779,11 @@ RunService.Heartbeat:Connect(function()
                         local killerVelocity=killerRoot.AssemblyLinearVelocity
                         local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
                         local distance=flatOffset.Magnitude
+
                         if distance<=HIDDEN_RANGE then
-                            if doSkillParry() then data.consumed=true end
+                            if doSkillParry() then
+                                data.consumed=true
+                            end
                         else
                             local killerFlatVelocity=Vector3.new(killerVelocity.X,0,killerVelocity.Z)
                             local relative=killerFlatVelocity
@@ -775,7 +793,9 @@ RunService.Heartbeat:Connect(function()
                                 if predictedDistance<=HIDDEN_RANGE then
                                     local actualDistance=getSkillDistance(killerChar)
                                     if actualDistance<=HIDDEN_RANGE then
-                                        if doSkillParry() then data.consumed=true end
+                                        if doSkillParry() then
+                                            data.consumed=true
+                                        end
                                     end
                                 end
                             end
@@ -790,44 +810,26 @@ RunService.Heartbeat:Connect(function()
                         local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
                         local distance=flatOffset.Magnitude
                         if distance<=ABYSSWALKER_RANGE then
-                            if doSkillParry() then data.consumed=true end
-                        end
-                    end
-                end
-            end
-        end
-        for killerChar,data in pairs(STATE.activeMaskedSkillAttackers) do
-            if not killerChar or not killerChar.Parent or not data or not data.track then
-                STATE.activeMaskedSkillAttackers[killerChar]=nil
-            elseif not data.track.IsPlaying then
-                STATE.activeMaskedSkillAttackers[killerChar]=nil
-            elseif not data.consumed and not STATE.ignoredTheMaskedDuck then
-                local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
-                if killerRoot then
-                    local killerPos=killerRoot.Position
-                    local flatOffset=Vector3.new(localPos.X-killerPos.X,0,localPos.Z-killerPos.Z)
-                    local distance=flatOffset.Magnitude
-                    if data.type=="maskedspecial" and distance<=MASKED_SPECIAL_RANGE then
-                        local seq=STATE.maskedSequence[killerChar]
-                        local prepared=seq and seq.armed and seq.prepared and not seq.consumed and tick()<=seq.expires
-                        if prepared then
                             if doSkillParry() then
                                 data.consumed=true
-                                seq.consumed=true
-                                clearMaskedSequence(killerChar)
                             end
                         end
                     end
                 end
             end
         end
+
+        -- The Masked is handled ONLY by maskedHeartbeatMonitor().
+        -- No normal skill/special logic is allowed to trigger it here.
         maskedHeartbeatMonitor()
     end)
+
     RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then return end
         local localChar=localPlayer.Character
         local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
         if not localRoot then return end
+
         for killerChar,data in pairs(STATE.activeAttackers) do
             if killerChar and killerChar.Parent and killerChar~=localChar and data and not data.consumed and data.track and data.track.IsPlaying and data.profile then
                 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
@@ -838,19 +840,26 @@ RunService.Heartbeat:Connect(function()
                     local flatOffset=Vector3.new(offset.X,0,offset.Z)
                     local distance=offset.Magnitude
                     local closingSpeed=0
+
                     if flatOffset.Magnitude>0 then
                         closingSpeed=killerFlatVelocity:Dot(flatOffset.Unit)
                     end
+
                     local emergency=false
                     if distance<=HARD_CLOSE_RANGE then
                         emergency=true
                     elseif distance<=CLOSE_RANGE and closingSpeed>=MIN_CLOSING_SPEED then
                         local timeToImpact=distance/closingSpeed
-                        if timeToImpact<=EMERGENCY_TIME then emergency=true end
+                        if timeToImpact<=EMERGENCY_TIME then
+                            emergency=true
+                        end
                     end
+
                     if emergency then
                         if canNormalAttackParry(killerChar,distance) then
-                            if doParry(true,killerChar,distance) then data.consumed=true end
+                            if doParry(true,killerChar,distance) then
+                                data.consumed=true
+                            end
                         end
                     else
                         local position=data.track.TimePosition or 0
@@ -860,32 +869,43 @@ RunService.Heartbeat:Connect(function()
                         local progress=length>0 and (position*speed)/length or 0
                         local triggerTime=(data.profile.triggerTime or 0)/speed
                         local triggerProgress=data.profile.triggerProgress or 0
-                        local animationReady=position>=triggerTime or progress>=triggerProgress
+
+                        local earlyTriggerTime=math.max(triggerTime-EARLY_TRIGGER_TIME,0)
+                        local earlyTriggerProgress=math.max(triggerProgress-EARLY_TRIGGER_PROGRESS,0)
+                        local animationReady=position>=earlyTriggerTime or progress>=earlyTriggerProgress
+
                         local attackWindowOpen=true
                         if data.profile.type=="attack" then
                             attackWindowOpen=position<=triggerTime+ATTACK_TRIGGER_GRACE
                         end
+
                         local lungeReady=false
                         local critical=false
+
                         if data.profile.type=="lungehold" then
                             local attackReach=3.5
                             local impactDistance=math.max(distance-attackReach,0)
                             local timeToImpact=math.huge
-                            if closingSpeed>0 then timeToImpact=impactDistance/closingSpeed end
+                            if closingSpeed>0 then
+                                timeToImpact=impactDistance/closingSpeed
+                            end
                             lungeReady=closingSpeed>=5 and timeToImpact<=0.30
                             critical=closingSpeed>=3.5 and timeToImpact<=0.15
                         end
+
                         if (animationReady and attackWindowOpen) or lungeReady or critical then
                             if canNormalAttackParry(killerChar,distance) then
                                 local movingCorrectly=true
                                 if flatOffset.Magnitude>0 and killerFlatVelocity.Magnitude>5 then
                                     movingCorrectly=killerFlatVelocity.Unit:Dot(flatOffset.Unit)>=-0.15
                                 end
+
                                 if movingCorrectly then
                                     local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
                                     local predictedKiller=killerRoot.Position+killerFlatVelocity*(ping+0.020)
                                     local predictedDistance=(Vector3.new(localRoot.Position.X,0,localRoot.Position.Z)-Vector3.new(predictedKiller.X,0,predictedKiller.Z)).Magnitude
                                     local trigger=false
+
                                     if distance<=HARD_CLOSE_RANGE then
                                         trigger=true
                                     elseif closingSpeed>=2.5 and math.max(distance-3.5,0)/closingSpeed<=0.24 then
@@ -897,8 +917,11 @@ RunService.Heartbeat:Connect(function()
                                     elseif animationReady and attackWindowOpen and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+1.75 then
                                         trigger=true
                                     end
+
                                     if trigger and distance<=STATE.autoParryRadius then
-                                        if doParry(true,killerChar,distance) then data.consumed=true end
+                                        if doParry(true,killerChar,distance) then
+                                            data.consumed=true
+                                        end
                                     end
                                 end
                             end
@@ -908,22 +931,26 @@ RunService.Heartbeat:Connect(function()
             end
         end
     end)
-    local espRing={}
+
+   local espRing={}
     local espLoop=nil
     local espCache={}
     local SEGMENTS=32
     local lastRadius=-1
+
     local function buildRing()
         for _,p in ipairs(espRing) do
             if p and p.Parent then p:Destroy() end
         end
         espRing={}
         espCache={}
+
         local step=(2*math.pi)/SEGMENTS
         for i=1,SEGMENTS do
             local angle=step*(i-1)
             local nextAngle=step*i
             espCache[i]={cx=math.cos(angle),cz=math.sin(angle),nx=math.cos(nextAngle),nz=math.sin(nextAngle)}
+
             local seg=Instance.new("Part")
             seg.Shape=Enum.PartType.Block
             seg.Anchored=true
@@ -939,6 +966,7 @@ RunService.Heartbeat:Connect(function()
             espRing[i]=seg
         end
     end
+
     local function updateSegmentSizes(radius)
         local arcLen=(2*math.pi*radius)/SEGMENTS
         for _,seg in ipairs(espRing) do
@@ -947,6 +975,7 @@ RunService.Heartbeat:Connect(function()
             end
         end
     end
+
     local function destroyRing()
         for _,p in ipairs(espRing) do
             if p and p.Parent then p:Destroy() end
@@ -955,6 +984,7 @@ RunService.Heartbeat:Connect(function()
         espCache={}
         lastRadius=-1
     end
+
     function toggleAutoParryESP(state)
         if state then
             buildRing()
@@ -962,12 +992,15 @@ RunService.Heartbeat:Connect(function()
                 if not localPlayer.Character then return end
                 local root=localPlayer.Character:FindFirstChild("HumanoidRootPart")
                 if not root then return end
+
                 local radius=STATE.autoParryRadius
                 if radius~=lastRadius then
                     updateSegmentSizes(radius)
                     lastRadius=radius
                 end
+
                 local center=root.Position-Vector3.new(0,root.Size.Y/2+0.6,0)
+
                 for i,seg in ipairs(espRing) do
                     if seg and seg.Parent then
                         local c=espCache[i]
@@ -986,6 +1019,7 @@ RunService.Heartbeat:Connect(function()
         end
     end
 end
+
 RunService.Heartbeat:Connect(function(dt)
     for i=1,#MasterTasks do
         local t=MasterTasks[i]
@@ -996,59 +1030,128 @@ RunService.Heartbeat:Connect(function(dt)
         end
     end
 end)
+
 local function BuildUI()
-    local Window=Chloex:Window({Title="BOLONG-HUB",Image="84034353458936",Footer="Violence District",Author="Discord.gg/pWpgqVGxNK",Color=ACCENT_COLOR,Version=1,Search=true,Folder="BolongHub"})
+    local Window=Chloex:Window({
+        Title="BOLONG-HUB",
+        Image="84034353458936",
+        Footer="Violence District",
+        Author="Discord.gg/pWpgqVGxNK",
+        Color=ACCENT_COLOR,
+        Version=1,
+        Search=true,
+        Folder="BolongHub"
+    })
+
     local ExclusiveTab=Window:AddTab({Name="Exclusive",Icon="sparkles"})
     local APSection=ExclusiveTab:AddSection("Auto Parry",nil)
+
     local APH1=APSection:AddHStack()
-    APH1:AddToggle({Title="Auto Parry",Default=false,Callback=function(v)
-        STATE.autoParryEnabled=v
-        if not v then
-            STATE.activeAttackers={}
-            STATE.activeSkillAttackers={}
-            STATE.activeMaskedSkillAttackers={}
-            STATE.maskedLungeArmed={}
-            STATE.maskedSequence={}
-        end
-    end})
-    APH1:AddToggle({Title="Radius ESP",Default=false,Callback=function(v)
-        STATE.autoParryRadiusEsp=v
-        if toggleAutoParryESP then toggleAutoParryESP(v) end
-    end})
-    APSection:AddToggle({Title="The Hidden",Default=false,Callback=function(v)
-        STATE.ignoredTheHidden=v
-        if v then
-            for char,data in pairs(STATE.activeSkillAttackers) do
-                if data.name and data.name:lower()=="the hidden" then STATE.activeSkillAttackers[char]=nil end
+    APH1:AddToggle({
+        Title="Auto Parry",
+        Default=false,
+        Callback=function(v)
+            STATE.autoParryEnabled=v
+            if not v then
+                STATE.activeAttackers={}
+                STATE.activeSkillAttackers={}
+                STATE.activeMaskedSkillAttackers={}
+                STATE.maskedLungeArmed={}
+                STATE.maskedSequence={}
             end
         end
-    end})
-    APSection:AddToggle({Title="The Abysswalker",Default=false,Callback=function(v)
-        STATE.ignoredTheAbysswalker=v
-        if v then
-            for char,data in pairs(STATE.activeSkillAttackers) do
-                if data and data.skillId==ABYSSWALKER_ANIM_ID then STATE.activeSkillAttackers[char]=nil end
+    })
+
+    APH1:AddToggle({
+        Title="Radius ESP",
+        Default=false,
+        Callback=function(v)
+            STATE.autoParryRadiusEsp=v
+            if toggleAutoParryESP then toggleAutoParryESP(v) end
+        end
+    })
+
+    APSection:AddSection("Ignored Skill Killers",nil)
+
+    APSection:AddToggle({
+        Title="The Hidden",
+        Default=false,
+        Callback=function(v)
+            STATE.ignoredTheHidden=v
+            if v then
+                for char,data in pairs(STATE.activeSkillAttackers) do
+                    if data.name and data.name:lower()=="the hidden" then
+                        STATE.activeSkillAttackers[char]=nil
+                    end
+                end
             end
         end
-    end})
-    APSection:AddToggle({Title="The Masked (Duck)",Default=false,Callback=function(v)
-        STATE.ignoredTheMaskedDuck=v
-        if v then
-            for char,data in pairs(STATE.activeAttackers) do
-                if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then STATE.activeAttackers[char]=nil end
+    })
+
+    APSection:AddToggle({
+        Title="The Abysswalker",
+        Default=false,
+        Callback=function(v)
+            STATE.ignoredTheAbysswalker=v
+            if v then
+                for char,data in pairs(STATE.activeSkillAttackers) do
+                    if data and data.skillId==ABYSSWALKER_ANIM_ID then
+                        STATE.activeSkillAttackers[char]=nil
+                    end
+                end
             end
-            for char,data in pairs(STATE.activeSkillAttackers) do
-                if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then STATE.activeSkillAttackers[char]=nil end
-            end
-            for char,data in pairs(STATE.activeMaskedSkillAttackers) do
-                if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then STATE.activeMaskedSkillAttackers[char]=nil end
-            end
-            STATE.maskedLungeArmed={}
-            STATE.maskedSequence={}
         end
-    end})
-    APSection:AddSlider({Title="Parry Radius (Stud)",Min=4,Max=40,Default=11,Increment=1,Callback=function(v) STATE.autoParryRadius=v end})
-    APSection:AddSlider({Title="Aim Strictness",Min=-1,Max=1,Default=0.1,Increment=0.1,Callback=function(v) STATE.aimStrictness=v end})
+    })
+
+    APSection:AddToggle({
+        Title="The Masked (Duck)",
+        Default=false,
+        Callback=function(v)
+            STATE.ignoredTheMaskedDuck=v
+            if v then
+                for char,data in pairs(STATE.activeAttackers) do
+                    if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then
+                        STATE.activeAttackers[char]=nil
+                    end
+                end
+                for char,data in pairs(STATE.activeSkillAttackers) do
+                    if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then
+                        STATE.activeSkillAttackers[char]=nil
+                    end
+                end
+                for char,data in pairs(STATE.activeMaskedSkillAttackers) do
+                    if data.name and (data.name:lower()=="the masked (duck)" or data.name:lower()=="the masked") then
+                        STATE.activeMaskedSkillAttackers[char]=nil
+                    end
+                end
+                STATE.maskedLungeArmed={}
+                STATE.maskedSequence={}
+            end
+        end
+    })
+
+    APSection:AddSlider({
+        Title="Parry Radius (Stud)",
+        Min=4,
+        Max=40,
+        Default=11,
+        Increment=1,
+        Callback=function(v)
+            STATE.autoParryRadius=v
+        end
+    })
+
+    APSection:AddSlider({
+        Title="Aim Strictness",
+        Min=-1,
+        Max=1,
+        Default=0.1,
+        Increment=0.1,
+        Callback=function(v)
+            STATE.aimStrictness=v
+        end
+    })
 end
+
 BuildUI()
 print("BOLONGHUB LITE LOADED!")
