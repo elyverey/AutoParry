@@ -12,7 +12,14 @@ local ACCENT_COLOR=Color3.fromRGB(255,255,255)
 local ABYSSWALKER_ANIM_ID=80411309607666
 
 local function Notify(title,content,delay)
-Chloex:MakeNotify({Title=title or "BOLONG-HUB",Description="Info",Content=content or "",Color=ACCENT_COLOR,Time=0.4,Delay=delay or 2})
+Chloex:MakeNotify({
+Title=title or "BOLONG-HUB",
+Description="Info",
+Content=content or "",
+Color=ACCENT_COLOR,
+Time=0.4,
+Delay=delay or 2
+})
 end
 
 local STATE={
@@ -36,7 +43,12 @@ killerCharacters={}
 local MasterTasks={}
 
 local function RegisterTask(name,interval,fn)
-MasterTasks[#MasterTasks+1]={name=name,interval=interval,timer=0,fn=fn}
+MasterTasks[#MasterTasks+1]={
+name=name,
+interval=interval,
+timer=0,
+fn=fn
+}
 end
 
 local toggleAutoParryESP
@@ -71,8 +83,6 @@ local MIN_CLOSING_SPEED=2
 local EMERGENCY_TIME=0.18
 local VAULT_EXTRA_RANGE=2.25
 local EDGE_TOLERANCE=1.0
-local EARLY_TRIGGER_TIME=0.006
-local EARLY_TRIGGER_PROGRESS=0.004
 local ATTACK_TRIGGER_GRACE=0.18
 
 local ATTACK_PROFILES={
@@ -98,12 +108,17 @@ local ATTACK_PROFILES={
 }
 
 local function getAnimNumericId(animId)
-if typeof(animId)~="string" then return nil end
+if typeof(animId)~="string" then
+return nil
+end
+
 return tonumber(animId:match("%d+"))
 end
 
 local function getKillerName(player,char)
-if not player or not char then return nil end
+if not player or not char then
+return nil
+end
 
 local values=char:FindFirstChild("Values")
 
@@ -125,15 +140,21 @@ return nil
 end
 
 local function isKillerTeam(player)
-if not player then return false end
+if not player then
+return false
+end
 
 local team=player.Team
 
-if not team then return false end
+if not team then
+return false
+end
 
 local teamName=team.Name
 
-if typeof(teamName)~="string" then return false end
+if typeof(teamName)~="string" then
+return false
+end
 
 return teamName:lower():find("killer")~=nil
 end
@@ -141,7 +162,9 @@ end
 local function sendParryInput()
 local char=localPlayer.Character
 
-if not char then return end
+if not char then
+return
+end
 
 local mobGui=PlayerGui:FindFirstChild("Survivor-mob")
 local controls=mobGui and mobGui:FindFirstChild("Controls")
@@ -184,13 +207,21 @@ end
 end
 
 local function parryInputAvailable(now)
-if now-STATE.lastParryTime<0.01 then return false end
-if now-STATE.lastSkillParryTime<0.01 then return false end
+if now-STATE.lastParryTime<0.01 then
+return false
+end
+
+if now-STATE.lastSkillParryTime<0.01 then
+return false
+end
+
 return true
 end
 
 local function doParry(force,killerChar,distance)
-if not STATE.autoParryEnabled then return false end
+if not STATE.autoParryEnabled then
+return false
+end
 
 local now=tick()
 
@@ -294,7 +325,9 @@ return true
 end
 
 local function doSkillParry()
-if not STATE.autoParryEnabled then return false end
+if not STATE.autoParryEnabled then
+return false
+end
 
 local now=tick()
 
@@ -310,7 +343,9 @@ return true
 end
 
 local function isIgnoredSkillKiller(killerName)
-if typeof(killerName)~="string" then return false end
+if typeof(killerName)~="string" then
+return false
+end
 
 local name=killerName:lower()
 
@@ -631,6 +666,45 @@ end
 end
 end
 
+local function registerAbysswalkerAttack(char,kName,track)
+if STATE.ignoredTheAbysswalker then
+return
+end
+
+local data={
+name=kName or "The Abysswalker",
+track=track,
+type="abysswalker",
+started=tick(),
+consumed=false,
+skillId=ABYSSWALKER_ANIM_ID
+}
+
+STATE.activeSkillAttackers[char]=data
+
+local conn
+
+conn=track.Stopped:Connect(function()
+if conn then
+conn:Disconnect()
+end
+
+task.defer(function()
+if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
+STATE.activeSkillAttackers[char]=nil
+end
+end)
+end)
+
+local distance=getSkillDistance(char)
+
+if distance<=ABYSSWALKER_RANGE then
+if doSkillParry() then
+data.consumed=true
+end
+end
+end
+
 local function getMaskedWalkTracks(char)
 local tracks={}
 
@@ -821,6 +895,7 @@ end
 
 if numericId==MASKED_LUNGEHOLD_ID then
 local now=tick()
+
 local actualLength=track.Length
 
 if not actualLength or actualLength<=0 then
@@ -994,7 +1069,10 @@ if detectedName then
 kName=detectedName
 
 if not known then
-STATE.killerCharacters[char]={player=player,name=kName}
+STATE.killerCharacters[char]={
+player=player,
+name=kName
+}
 else
 known.player=player
 known.name=kName
@@ -1005,7 +1083,10 @@ end
 
 if teamKiller then
 if not known then
-STATE.killerCharacters[char]={player=player,name=kName}
+STATE.killerCharacters[char]={
+player=player,
+name=kName
+}
 else
 known.player=player
 
@@ -1081,7 +1162,10 @@ local known=STATE.killerCharacters[char]
 if known then
 known.name=detectedName
 else
-STATE.killerCharacters[char]={player=player,name=detectedName}
+STATE.killerCharacters[char]={
+player=player,
+name=detectedName
+}
 end
 else
 local known=STATE.killerCharacters[char]
@@ -1098,12 +1182,25 @@ or numericId==MASKED_WALK_ID
 or numericId==MASKED_ATTACK_ID
 or numericId==MASKED_ATTACKDONE_ID then
 
-local profile=MASKED_EXTRA_ANIMS[numericId] or {type="maskedfast",length=1,speed=1}
+local profile=MASKED_EXTRA_ANIMS[numericId] or {
+type="maskedfast",
+length=1,
+speed=1
+}
 
-registerMaskedFastAttack(char,currentName,track,profile,numericId)
+registerMaskedFastAttack(
+char,
+currentName,
+track,
+profile,
+numericId
+)
 
 if not STATE.killerCharacters[char] then
-STATE.killerCharacters[char]={player=player,name=currentName}
+STATE.killerCharacters[char]={
+player=player,
+name=currentName
+}
 end
 
 return
@@ -1113,6 +1210,7 @@ if numericId==SKILL_ANIM_ID then
 if currentName:lower()=="the hidden" then
 registerSkillAttack(char,currentName,track)
 end
+
 return
 end
 
@@ -1120,6 +1218,7 @@ if numericId==HIDDEN_WALK_ANIM_ID then
 if currentName:lower()=="the hidden" then
 registerHiddenWalk(char,track)
 end
+
 return
 end
 
@@ -1127,7 +1226,10 @@ if numericId==ABYSSWALKER_ANIM_ID then
 registerAbysswalkerAttack(char,currentName,track)
 
 if not STATE.killerCharacters[char] then
-STATE.killerCharacters[char]={player=player,name=currentName}
+STATE.killerCharacters[char]={
+player=player,
+name=currentName
+}
 end
 
 return
@@ -1142,7 +1244,10 @@ end
 local known=STATE.killerCharacters[char]
 
 if not known then
-STATE.killerCharacters[char]={player=player,name=currentName}
+STATE.killerCharacters[char]={
+player=player,
+name=currentName
+}
 elseif currentName~="Unknown Killer" then
 known.name=currentName
 end
@@ -1174,44 +1279,6 @@ end
 end)
 end)
 end)
-
-local function registerAbysswalkerAttack(char,kName,track)
-if STATE.ignoredTheAbysswalker then
-return
-end
-
-local data={
-name=kName or "The Abysswalker",
-track=track,
-type="abysswalker",
-started=tick(),
-consumed=false,
-skillId=ABYSSWALKER_ANIM_ID
-}
-
-STATE.activeSkillAttackers[char]=data
-
-local conn
-
-conn=track.Stopped:Connect(function()
-if conn then
-conn:Disconnect()
-end
-
-task.defer(function()
-if STATE.activeSkillAttackers[char] and STATE.activeSkillAttackers[char].track==track then
-STATE.activeSkillAttackers[char]=nil
-end
-end)
-end)
-
-local distance=getSkillDistance(char)
-
-if distance<=ABYSSWALKER_RANGE then
-if doSkillParry() then
-data.consumed=true
-end
-end
 end
 
 local function OnParryPlayerAdded(player)
@@ -1494,7 +1561,15 @@ return
 end
 
 for killerChar,data in pairs(STATE.activeAttackers) do
-if killerChar and killerChar.Parent and killerChar~=localChar and data and not data.consumed and data.track and data.track.IsPlaying and data.profile then
+if killerChar
+and killerChar.Parent
+and killerChar~=localChar
+and data
+and not data.consumed
+and data.track
+and data.track.IsPlaying
+and data.profile then
+
 local killerRoot=killerChar:FindFirstChild("HumanoidRootPart")
 
 if killerRoot then
@@ -1590,7 +1665,10 @@ elseif closingSpeed>=5 and math.max(distance-3.5,0)/closingSpeed<=0.32 then
 trigger=true
 elseif predictedDistance<=STATE.autoParryRadius and closingSpeed>=2.5 then
 trigger=true
-elseif animationReady and attackWindowOpen and distance<=STATE.autoParryRadius and predictedDistance<=STATE.autoParryRadius+1.75 then
+elseif animationReady
+and attackWindowOpen
+and distance<=STATE.autoParryRadius
+and predictedDistance<=STATE.autoParryRadius+1.75 then
 trigger=true
 end
 
