@@ -214,16 +214,16 @@ do
         return true
     end
 
-    local function getPalletModel(instance)
-        local current=instance
+    local function getModelRootFromPart(part)
+        if not part then
+            return nil
+        end
+
+        local current=part
 
         while current and current~=Workspace do
             if current:IsA("Model") then
-                local name=current.Name:lower()
-
-                if name:find("pallet") then
-                    return current
-                end
+                return current
             end
 
             current=current.Parent
@@ -232,36 +232,104 @@ do
         return nil
     end
 
-    local function isUndroppedPallet(instance)
-        local pallet=getPalletModel(instance)
-
-        if not pallet then
+    local function isPalletPart(part)
+        if not part then
             return false
         end
 
-        local ok,_,size=pcall(function()
-            local cf,boxSize=pallet:GetBoundingBox()
-            return cf,boxSize
-        end)
+        local current=part
 
-        if not ok or not size then
+        while current and current~=Workspace do
+            local name=typeof(current.Name)=="string" and current.Name:lower() or ""
+
+            if name:find("pallet",1,true) then
+                return true
+            end
+
+            current=current.Parent
+        end
+
+        return false
+    end
+
+    local function isUndroppedPallet(part)
+        if not isPalletPart(part) then
             return false
         end
 
-        local shortestHorizontal=math.min(size.X,size.Z)
+        local model=getModelRootFromPart(part)
 
-        if shortestHorizontal<=0 then
+        if not model then
             return false
         end
 
-        if size.Y>=2 and size.Y>shortestHorizontal*1.5 then
+        local pivot=model:GetPivot()
+        local up=pivot.UpVector
+
+        if up.Magnitude<=0.01 then
+            return false
+        end
+
+        local uprightDot=math.abs(up.Unit:Dot(Vector3.new(0,1,0)))
+
+        if uprightDot>=0.65 then
             return true
         end
 
         return false
     end
 
-    local function doParry(force,killerChar,distance,allowPredictedRange,skipLineOfSight)
+    local function raycastIgnoringUndroppedPallet(origin,target,params)
+        local direction=target-origin
+        local totalDistance=direction.Magnitude
+
+        if totalDistance<=0.05 then
+            return nil
+        end
+
+        local unit=direction.Unit
+        local currentOrigin=origin
+        local remainingDistance=totalDistance
+        local ignored={}
+
+        for _=1,8 do
+            if remainingDistance<=0.05 then
+                return nil
+            end
+
+            params.FilterDescendantsInstances={params.FilterDescendantsInstances[1],params.FilterDescendantsInstances[2],table.unpack(ignored)}
+
+            local result=Workspace:Raycast(
+                currentOrigin,
+                unit*remainingDistance,
+                params
+            )
+
+            if not result then
+                return nil
+            end
+
+            if isUndroppedPallet(result.Instance) then
+                local palletModel=getModelRootFromPart(result.Instance)
+
+                if palletModel then
+                    ignored[#ignored+1]=palletModel
+                else
+                    ignored[#ignored+1]=result.Instance
+                end
+
+                local traveled=(result.Position-currentOrigin).Magnitude
+                currentOrigin=result.Position+unit*0.06
+                remainingDistance=remainingDistance-traveled-0.06
+            else
+                return result
+            end
+        end
+
+        return nil
+    end
+
+    local function doParry(force,killerChar,distance,allowPredictedRange,skipLineOfSight,customRadius)
         if not STATE.autoParryEnabled then
             return false
         end
@@ -273,7 +341,7 @@ do
         end
 
         if killerChar and distance then
-            local allowedRange=STATE.autoParryRadius
+            local allowedRange=customRadius or STATE.autoParryRadius
             local allowVault=false
             local data=STATE.activeAttackers[killerChar]
 
@@ -327,47 +395,35 @@ do
                 local clearCount=0
                 local blockedCount=0
                 local vaultHit=false
-                local droppedPalletHit=false
 
                 for _,pair in ipairs(rayData) do
-                    local result=Workspace:Raycast(pair[1],pair[2]-pair[1],params)
+                    local result=raycastIgnoringUndroppedPallet(pair[1],pair[2],params)
 
                     if not result then
                         clearCount=clearCount+1
                     else
+                        blockedCount=blockedCount+1
+
                         local hit=result.Instance
 
-                        if hit and isUndroppedPallet(hit) then
-                            clearCount=clearCount+1
-                        else
-                            blockedCount=blockedCount+1
+                        if hit then
+                            local n=hit.Name:lower()
 
-                            if hit then
-                                local n=hit.Name:lower()
-
-                                if n:find("vault") or n:find("window") or n:find("ledge") then
-                                    vaultHit=true
-                                end
-
-                                if getPalletModel(hit) then
-                                    droppedPalletHit=true
-                                end
+                            if n:find("vault") or n:find("window") or n:find("ledge") then
+                                vaultHit=true
                             end
                         end
                     end
                 end
 
-                if droppedPalletHit and clearCount==0 then
-                    return false
-                end
-
                 if clearCount==0 then
                     if allowVault and vaultHit and distance<=allowedRange+VAULT_EXTRA_RANGE then
+                    elseif allowPredictedRange then
                     else
                         return false
                     end
                 elseif blockedCount>=5 and clearCount<2 then
-                    if not (allowVault and vaultHit and distance<=allowedRange+VAULT_EXTRA_RANGE) then
+                    if not (allowVault and vaultHit and distance<=allowedRange+VAULT_EXTRA_RANGE) and not allowPredictedRange then
                         return false
                     end
                 end
@@ -624,7 +680,7 @@ do
             return false
         end
 
-        if doSkillParry() then
+        if doParry(true,char,getSkillDistance(char),true,false,HIDDEN_WALK_RANGE) then
             seq.consumed=true
             seq.parried=true
             clearHiddenSequence(char)
@@ -1397,7 +1453,7 @@ do
         end
     end)
 
-    RegisterTask("AttackersMonitor",0,function()
+   RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled or next(STATE.activeAttackers)==nil then
             return
         end
@@ -1572,7 +1628,7 @@ do
             end
         end
 
-        espRing={}
+     espRing={}
         espCache={}
         lastRadius=-1
     end
@@ -1620,7 +1676,9 @@ do
             destroyRing()
         end
     end
-endRunService.Heartbeat:Connect(function(dt)
+end
+
+RunService.Heartbeat:Connect(function(dt)
     for i=1,#MasterTasks do
         local t=MasterTasks[i]
 
