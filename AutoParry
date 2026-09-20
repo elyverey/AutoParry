@@ -61,7 +61,7 @@ do
     local ABYSSWALKER_ANIM="rbxassetid://"..ABYSSWALKER_ANIM_ID
     local INSTANT_ANIM_ID="rbxassetid://"..SKILL_ANIM_ID
 
-    local HIDDEN_ARM_TIME=1.400
+    local HIDDEN_ARM_TIME=0.600
     local HIDDEN_WALK_RANGE=10.5
     local HIDDEN_SEQUENCE_TIME=3.0
     local ABYSSWALKER_RANGE=12.5
@@ -379,6 +379,62 @@ do
         return (Vector3.new(a.X,0,a.Z)-Vector3.new(b.X,0,b.Z)).Magnitude
     end
 
+    local function getPredictedDistance(char,maxTime)
+        local localChar=localPlayer.Character
+        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
+        local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
+
+        if not localRoot or not killerRoot then
+            return math.huge
+        end
+
+        local localPosition=localRoot.Position
+        local killerPosition=killerRoot.Position
+
+        local localVelocity=localRoot.AssemblyLinearVelocity
+        local killerVelocity=killerRoot.AssemblyLinearVelocity
+
+        local localFlatVelocity=Vector3.new(
+            localVelocity.X,
+            0,
+            localVelocity.Z
+        )
+
+        local killerFlatVelocity=Vector3.new(
+            killerVelocity.X,
+            0,
+            killerVelocity.Z
+        )
+
+        local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
+        local baseTime=ping+0.04
+        local bestDistance=math.huge
+
+        local samples={
+            math.clamp(baseTime,0,maxTime),
+            math.clamp(baseTime+0.05,0,maxTime),
+            math.clamp(baseTime+0.10,0,maxTime),
+            math.clamp(baseTime+0.16,0,maxTime),
+            math.clamp(baseTime+0.22,0,maxTime)
+        }
+
+        for _,predictionTime in ipairs(samples) do
+            local predictedLocal=localPosition+localFlatVelocity*predictionTime
+            local predictedKiller=killerPosition+killerFlatVelocity*predictionTime
+
+            local predictedDistance=(
+                Vector3.new(predictedLocal.X,0,predictedLocal.Z)-
+                Vector3.new(predictedKiller.X,0,predictedKiller.Z)
+            ).Magnitude
+
+            if predictedDistance<bestDistance then
+                bestDistance=predictedDistance
+            end
+        end
+
+        return bestDistance
+    end
+
     local function getFaceKillerThreshold()
         local strictness=math.clamp(STATE.aimStrictness,-1,1)
 
@@ -468,7 +524,7 @@ do
         end
 
         if closingSpeed and predictedDistance then
-            if closingSpeed>=4 and predictedDistance<=STATE.autoParryRadius then
+            if closingSpeed>=3.5 and predictedDistance<=STATE.autoParryRadius then
                 return true
             end
         end
@@ -515,7 +571,15 @@ do
             return false
         end
 
-        return getSkillDistance(char)<=HIDDEN_WALK_RANGE
+        local distance=getSkillDistance(char)
+
+        if distance<=HIDDEN_WALK_RANGE then
+            return true
+        end
+
+        local predictedDistance=getPredictedDistance(char,0.28)
+
+        return predictedDistance<=HIDDEN_WALK_RANGE
     end
 
     local function hiddenTryWalkParry(char,seq)
@@ -775,29 +839,7 @@ do
     end
 
     local function getMaskedPredictedDistance(char)
-        local localChar=localPlayer.Character
-        local localRoot=localChar and localChar:FindFirstChild("HumanoidRootPart")
-        local killerRoot=char and char:FindFirstChild("HumanoidRootPart")
-
-        if not localRoot or not killerRoot then
-            return math.huge
-        end
-
-        local killerVelocity=killerRoot.AssemblyLinearVelocity
-        local localVelocity=localRoot.AssemblyLinearVelocity
-        local ping=math.clamp(localPlayer:GetNetworkPing(),0,0.3)
-        local predictionTime=ping+0.08
-
-        local predictedKiller=killerRoot.Position+
-            Vector3.new(killerVelocity.X,0,killerVelocity.Z)*predictionTime
-
-        local predictedLocal=localRoot.Position+
-            Vector3.new(localVelocity.X,0,localVelocity.Z)*predictionTime
-
-        return (
-            Vector3.new(predictedLocal.X,0,predictedLocal.Z)-
-            Vector3.new(predictedKiller.X,0,predictedKiller.Z)
-        ).Magnitude
+        return getPredictedDistance(char,0.36)
     end
 
     local function maskedCanParryNow(char,seq)
@@ -813,7 +855,13 @@ do
             return false
         end
 
-        return getSkillDistance(char)<=STATE.autoParryRadius
+        local distance=getSkillDistance(char)
+
+        if distance<=STATE.autoParryRadius then
+            return true
+        end
+
+        return getMaskedPredictedDistance(char)<=STATE.autoParryRadius
     end
 
     local function maskedTryLungeParry(char,seq)
@@ -827,13 +875,8 @@ do
             return false
         end
 
-        local lungeTrack=seq.lungeTrack
-
-        if not lungeTrack or not lungeTrack.IsPlaying then
-            return false
-        end
-
         local distance=getSkillDistance(char)
+        local predictedDistance=getMaskedPredictedDistance(char)
 
         if distance<=STATE.autoParryRadius then
             if doParry(true,char,distance) then
@@ -845,8 +888,6 @@ do
 
             return false
         end
-
-        local predictedDistance=getMaskedPredictedDistance(char)
 
         if predictedDistance<=STATE.autoParryRadius then
             if doParry(true,char,distance,true) then
@@ -875,17 +916,30 @@ do
 
         local distance=getSkillDistance(char)
 
-        if doParry(true,char,distance) then
-            seq.consumed=true
-            seq.parried=true
-            clearMaskedSequence(char)
-            return true
+        if distance<=STATE.autoParryRadius then
+            if doParry(true,char,distance) then
+                seq.consumed=true
+                seq.parried=true
+                clearMaskedSequence(char)
+                return true
+            end
+        else
+            local predictedDistance=getMaskedPredictedDistance(char)
+
+            if predictedDistance<=STATE.autoParryRadius then
+                if doParry(true,char,distance,true) then
+                    seq.consumed=true
+                    seq.parried=true
+                    clearMaskedSequence(char)
+                    return true
+                end
+            end
         end
 
         return false
     end
 
-    local function maskedWalkIsNew(seq,track)
+local function maskedWalkIsNew(seq,track)
         if not seq or not track or seq.consumed then
             return false
         end
@@ -1069,6 +1123,16 @@ do
                         end
                     elseif seq.lungeReachedMinTime then
                         seq.lungeFinished=true
+
+                        local distance=getSkillDistance(killerChar)
+                        local predictedDistance=getMaskedPredictedDistance(killerChar)
+
+                        if distance<=STATE.autoParryRadius
+                        or predictedDistance<=STATE.autoParryRadius then
+                            if maskedTryLungeParry(killerChar,seq) then
+                                continue
+                            end
+                        end
                     end
                 end
 
@@ -1217,6 +1281,7 @@ do
             if not track or not track.Animation then
                 return
             end
+
             local numericId=getAnimNumericId(track.Animation.AnimationId)
 
             if not numericId then
@@ -1468,7 +1533,7 @@ do
         end
     end)
 
-RegisterTask("AttackersMonitor",0,function()
+    RegisterTask("AttackersMonitor",0,function()
         if not STATE.autoParryEnabled or next(STATE.activeAttackers)==nil then
             return
         end
@@ -1576,6 +1641,7 @@ RegisterTask("AttackersMonitor",0,function()
                                 timeToImpact=impactDistance/closingSpeed
                             end
 
+
                             lungeReady=closingSpeed>=5 and timeToImpact<=0.30
                             critical=closingSpeed>=3.5 and timeToImpact<=0.15
                         end
@@ -1623,7 +1689,7 @@ RegisterTask("AttackersMonitor",0,function()
         end
     end)
 
-RunService.Heartbeat:Connect(function()
+    RunService.Heartbeat:Connect(function()
         if not STATE.autoParryEnabled then
             return
         end
@@ -1807,7 +1873,8 @@ RunService.Heartbeat:Connect(function()
         end
     end)
 
-    RunService.Heartbeat:Connect(function()
+
+RunService.Heartbeat:Connect(function()
         if STATE.autoParryEnabled then
             hiddenHeartbeatMonitor()
         end
