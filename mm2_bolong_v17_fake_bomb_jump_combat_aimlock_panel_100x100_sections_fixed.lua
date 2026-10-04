@@ -936,9 +936,11 @@ autoFarmActive = false
 autoFarmCoinsRunning = false
 autoFarmCoinsThread = nil
 coinReachEnabled = false
-coinReachRange = 6
 coinReachOriginals = {}
 coinReachConnection = nil
+coinReachRemovingConnection = nil
+coinReachPending = {}
+coinReachGeneration = 0
 antiAFKEnabled = false
 autoPickupGunActive = false
 pickupPanelInteracting = false
@@ -1682,65 +1684,102 @@ local function scanCoinReachObjects()
     return objects
 end
 
+local function applyCoinReachObject(obj)
+    if not coinReachEnabled or not obj or not obj.Parent then
+        return
+    end
+    if obj.Name ~= "Coin_Server" or not obj:IsA("BasePart") then
+        return
+    end
+
+    if not coinReachOriginals[obj] then
+        coinReachOriginals[obj] = obj.Size
+    end
+
+    local originalSize = coinReachOriginals[obj]
+    if originalSize then
+        pcall(function()
+            obj.Size = originalSize * 4
+        end)
+    end
+end
+
+local function queueCoinReachObject(obj, generation)
+    if not coinReachEnabled or not obj or obj.Name ~= "Coin_Server" or not obj:IsA("BasePart") then
+        return
+    end
+
+    applyCoinReachObject(obj)
+
+    if coinReachPending[obj] then
+        return
+    end
+
+    coinReachPending[obj] = true
+    task.defer(function()
+        coinReachPending[obj] = nil
+        if not coinReachEnabled or generation ~= coinReachGeneration or not obj.Parent then
+            return
+        end
+
+        applyCoinReachObject(obj)
+        task.delay(0.01, function()
+            if coinReachEnabled and generation == coinReachGeneration and obj.Parent then
+                applyCoinReachObject(obj)
+            end
+        end)
+        task.delay(0.05, function()
+            if coinReachEnabled and generation == coinReachGeneration and obj.Parent then
+                applyCoinReachObject(obj)
+            end
+        end)
+    end)
+end
+
 local function ApplyCoinReach(state)
     coinReachEnabled = state == true
+    coinReachGeneration = coinReachGeneration + 1
+    local generation = coinReachGeneration
+    coinReachPending = {}
 
     if coinReachConnection then
         coinReachConnection:Disconnect()
         coinReachConnection = nil
     end
+    if coinReachRemovingConnection then
+        coinReachRemovingConnection:Disconnect()
+        coinReachRemovingConnection = nil
+    end
 
     if coinReachEnabled then
-        local function applyToCoin(obj)
-            if not coinReachEnabled or not obj or not obj.Parent then
-                return
-            end
-            if obj.Name == "Coin_Server" and obj:IsA("BasePart") then
-                if not coinReachOriginals[obj] then
-                    coinReachOriginals[obj] = obj.Size
-                end
-                obj.Size = coinReachOriginals[obj] * coinReachRange
-            end
-        end
-
         coinReachOriginals = {}
-        for _, obj in ipairs(scanCoinReachObjects()) do
-            applyToCoin(obj)
-        end
 
         coinReachConnection = Workspace.DescendantAdded:Connect(function(obj)
-            applyToCoin(obj)
+            if coinReachEnabled and generation == coinReachGeneration then
+                queueCoinReachObject(obj, generation)
+            end
         end)
+
+        coinReachRemovingConnection = Workspace.DescendantRemoving:Connect(function(obj)
+            coinReachOriginals[obj] = nil
+            coinReachPending[obj] = nil
+        end)
+
+        for _, obj in ipairs(scanCoinReachObjects()) do
+            queueCoinReachObject(obj, generation)
+        end
     else
         for obj, originalSize in pairs(coinReachOriginals) do
-            if obj and obj.Parent then
-                obj.Size = originalSize
+            if obj and obj.Parent and originalSize then
+                pcall(function()
+                    obj.Size = originalSize
+                end)
             end
         end
         coinReachOriginals = {}
+        coinReachPending = {}
     end
 end
-
-local coinReachRefreshRunning = false
-task.spawn(function()
-    while true do
-        if coinReachEnabled then
-            local coins = scanCoinReachObjects()
-            for _, obj in ipairs(coins) do
-                if obj and obj.Parent and obj.Name == "Coin_Server" and obj:IsA("BasePart") then
-                    if not coinReachOriginals[obj] then
-                        coinReachOriginals[obj] = obj.Size / math.max(coinReachRange, 1)
-                    end
-                    local targetSize = coinReachOriginals[obj] * coinReachRange
-                    if obj.Size ~= targetSize then
-                        obj.Size = targetSize
-                    end
-                end
-            end
-        end
-        task.wait(0.15)
-    end
-end)
 
 function AutoFarmCoinsFunc()
     local function GetMap()
@@ -1987,47 +2026,13 @@ RunService.Heartbeat:Connect(function()
 end)
 
 
-function getMurdererTargetPart()
-    local bestPlayer, bestPart
-    local bestScore = math.huge
-    local localChar = localPlayer.Character
-    local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
-
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= localPlayer and getRole(p) == "Murderer" and p.Character then
-            local char = p.Character
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            local root = char:FindFirstChild("HumanoidRootPart")
-
-            if hum and hum.Health > 0 and root then
-                local distance = localRoot and (root.Position - localRoot.Position).Magnitude or 0
-
-                if distance <= AUTO_SHOOT_MAX_DISTANCE then
-                    local bodyCFrame = char:GetBoundingBox()
-                    local bodyCenter = bodyCFrame.Position
-                    local part = root
-                    local score = distance + (bodyCenter - root.Position).Magnitude * 0.02
-
-                    if score < bestScore then
-                        bestScore = score
-                        bestPlayer = p
-                        bestPart = part
-                    end
-                end
-            end
-        end
-    end
-
-    return bestPlayer, bestPart
-end
-
 AUTO_SHOOT_PROJECTILE_SPEED = 700
 AUTO_SHOOT_MIN_LEAD = 0.002
 AUTO_SHOOT_MAX_LEAD = 0.22
 autoShootMotion = {}
 autoShootMotionAccumulator = 0
 AUTO_SHOOT_MAX_ACCELERATION = 260
-AUTO_SHOOT_PING_LEAD = 0.012
+AUTO_SHOOT_PING_LEAD = 0.35
 AUTO_SHOOT_DIRECTION_BLEND = 1
 AUTO_SHOOT_MAX_DISTANCE = math.huge
 AUTO_SHOOT_UPDATE_RATE = 0.025
@@ -2035,6 +2040,7 @@ AUTO_SHOOT_TARGET_SWITCH_MARGIN = 2.5
 AUTO_SHOOT_ZIGZAG_LEAD = 0.010
 AUTO_SHOOT_JUMP_VERTICAL_LEAD = 0.060
 AUTO_SHOOT_JUMP_HORIZONTAL_BOOST = 0.006
+AUTO_SHOOT_SHOT_COOLDOWN = 0.075
 
 function updateAutoShootMotion(deltaTime)
     if not AutoShootEnabled then
@@ -2147,13 +2153,18 @@ function getAutoShootPredictedPosition(targetPart, origin)
         return targetPart.Position
     end
 
-    local rootPosition = root.Position
-    local velocity = root.AssemblyLinearVelocity
+    local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+    if not torso or not torso:IsA("BasePart") then
+        return nil
+    end
+
+    local currentPosition = torso.Position
+    local velocity = torso.AssemblyLinearVelocity
     local acceleration = Vector3.zero
     local player = Players:GetPlayerFromCharacter(character)
     local motion = player and autoShootMotion[player]
     if motion then
-        velocity = motion.velocity:Lerp(velocity, 0.18)
+        velocity = motion.velocity:Lerp(velocity, 0.32)
         acceleration = motion.acceleration
     end
 
@@ -2161,8 +2172,6 @@ function getAutoShootPredictedPosition(targetPart, origin)
     local isJumping = state == Enum.HumanoidStateType.Jumping or state == Enum.HumanoidStateType.Freefall
     local isZigZag = motion and motion.zigzag == true
     local zigzagStrength = motion and motion.zigzagStrength or 0
-
-    local currentPosition = rootPosition
 
     local distance = (currentPosition - origin).Magnitude
     local ping = 0
@@ -2228,17 +2237,8 @@ function getAutoShootPredictedPosition(targetPart, origin)
     if isJumping then
         verticalLead = math.max(verticalLead, AUTO_SHOOT_JUMP_VERTICAL_LEAD)
     end
-    local gravity = -196.2
-    local verticalAcceleration = acceleration.Y
-    if isJumping then
-        if state == Enum.HumanoidStateType.Freefall then
-            verticalAcceleration = gravity
-        else
-            verticalAcceleration = math.clamp(verticalAcceleration, -196.2, 196.2)
-        end
-    end
-    local verticalPrediction = velocity.Y * verticalLead + verticalAcceleration * (0.5 * verticalLead * verticalLead)
-    verticalPrediction = math.clamp(verticalPrediction, -35, 35)
+    local verticalPrediction = velocity.Y * verticalLead + acceleration.Y * (0.5 * verticalLead * verticalLead)
+    verticalPrediction = math.clamp(verticalPrediction, -5, 5)
 
     local predicted = currentPosition + horizontalPrediction + Vector3.new(0, verticalPrediction, 0)
 
@@ -2255,17 +2255,16 @@ function getAutoShootPredictedPosition(targetPart, origin)
 end
 
 function getAutoShootTargetPoint(character, origin)
-    if not character then
+    if not character or not origin then
         return nil
     end
 
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local root = character:FindFirstChild("HumanoidRootPart")
-    if not humanoid or humanoid.Health <= 0 or not root then
+    local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+    if not torso or not torso:IsA("BasePart") then
         return nil
     end
 
-    return getAutoShootPredictedPosition(root, origin)
+    return getAutoShootPredictedPosition(torso, origin)
 end
 
 function getMurdererTargetPart()
@@ -2282,12 +2281,12 @@ function getMurdererTargetPart()
         if player ~= localPlayer then
             local character = player.Character
             local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-            local root = character and character:FindFirstChild("HumanoidRootPart")
+            local torso = character and (character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso"))
             local roleIsMurderer = getRole(player) == "Murderer"
             local hasKnife = character and character:FindFirstChild("Knife") ~= nil
 
-            if (roleIsMurderer or hasKnife) and root and humanoid and humanoid.Health > 0 then
-                local distance = (root.Position - localRoot.Position).Magnitude
+            if (roleIsMurderer or hasKnife) and torso and humanoid and humanoid.Health > 0 then
+                local distance = (torso.Position - localRoot.Position).Magnitude
                 local motion = autoShootMotion[player]
                 local speedPenalty = 0
                 if motion then
@@ -2298,7 +2297,7 @@ function getMurdererTargetPart()
                 if score < bestScore then
                     bestScore = score
                     bestPlayer = player
-                    bestPart = root
+                    bestPart = torso
                 end
             end
         end
@@ -2384,16 +2383,13 @@ function fireShotAtTarget(gun, targetPart)
     end
 
     local origin = handle.Position
-    local targetPosition = getAutoShootPredictedPosition(targetPart, origin)
     local character = targetPart.Parent
-    local betterPoint = getAutoShootTargetPoint(character, origin)
-    if betterPoint then
-        targetPosition = betterPoint
-    else
+    local targetPosition = getAutoShootTargetPoint(character, origin)
+    if not targetPosition then
         return false
     end
 
-    if not targetPosition or (targetPosition - origin).Magnitude < 0.01 then
+    if (targetPosition - origin).Magnitude < 0.01 then
         return false
     end
 
@@ -2408,7 +2404,7 @@ function fireShotAtTarget(gun, targetPart)
     end)
 
     if ok then
-        autoShootShotCooldownUntil = os.clock() + 0.12
+        autoShootShotCooldownUntil = os.clock() + AUTO_SHOOT_SHOT_COOLDOWN
         PlaySoundAsset(104895925840852, 1)
         playGunFiredVisual(handle, origin, targetPosition, targetPart)
     end
@@ -2431,10 +2427,13 @@ function autoShoot()
         return
     end
 
-    equipTool(gun)
-    task.wait(0.025)
-
-    local equippedGun = getToolByName(localPlayer, "Gun") or gun
+    local currentCharacter = localPlayer.Character
+    local equippedGun = currentCharacter and currentCharacter:FindFirstChild("Gun")
+    if not equippedGun then
+        equipTool(gun)
+        task.wait(0.005)
+        equippedGun = getToolByName(localPlayer, "Gun") or gun
+    end
     if fireShotAtTarget(equippedGun, targetPart) then
         return
     end
@@ -4753,27 +4752,10 @@ function BuildUI()
 
     local CoinReachSec = AutoFarmTab:AddSection("COINS REACH", nil)
     CoinReachSec:AddToggle({
-        Title = "Coin Reach",
+        Title = "Coins Reach (4x Size)",
         Default = false,
         Callback = function(v)
             ApplyCoinReach(v == true)
-        end
-    })
-    CoinReachSec:AddSlider({
-        Title = "Reach Range",
-        Min = 4,
-        Max = 23,
-        Default = 6,
-        Increment = 1,
-        Callback = function(v)
-            coinReachRange = math.clamp(tonumber(v) or 6, 4, 23)
-            if coinReachEnabled then
-                for obj, originalSize in pairs(coinReachOriginals) do
-                    if obj and obj.Parent then
-                        obj.Size = originalSize * coinReachRange
-                    end
-                end
-            end
         end
     })
 
