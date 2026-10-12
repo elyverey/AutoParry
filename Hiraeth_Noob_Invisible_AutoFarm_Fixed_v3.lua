@@ -5978,19 +5978,19 @@ function BuildUI()
         Footer = "Murder Mystery 2",
         Author = "discord.gg/pWpgqVGxNK",
         Color = ACCENT_COLOR,
-        Version = 2,
+        Version = 1.0.0,
         Search = true,
         Folder = "BolongHubMM2"
     })
 
     PlayOpenSound()
 
-    local VERSION = 2
+    local VERSION = 1.0.0
     W:InfoTab({
         Name = "Info", Icon = "info", SectionTitle = "Information", Banner = "79662603577585",
         BannerAspectRatio = 16/5, Version = VERSION, DiscordLink = "https://discord.gg/pWpgqVGxNK",
         DiscordName = "Community BolongHub", DiscordText = 'Gabung untuk update & support.',
-        DiscordDesc = 'Made by 11rill — features: Killer & Survivor Hitbox/ESP, Auto Aim, Auto Generator, Killer Warn, Camera Veil, and many more.',
+        DiscordDesc = 'Made by 11rill&ruvlegacys — features: Auto Shoot, Esp, Aimlock, And More,',
         CardsWidget = { { catwidget = "rbxassetid://117486345000318" } },
     })
 
@@ -6668,5 +6668,5 @@ function BuildUI()
 end
 
 BuildUI()
-print("BOLONG-HUB MM2 - DISCORD.GG/PWPGQVGXNK LOADED!")
+print("BOLONG-HUB MM2 - LOADED!")
 
