@@ -1064,7 +1064,7 @@ local function disableInfiniteStamina()
         staminaHooks[module] = nil
     end
     staminaModule = nil
-    table.clear(staminaHooks) -- Clear stale module references after respawn.
+    table.clear(staminaHooks)
 end
 
 local function enableInfiniteStamina()
@@ -1113,7 +1113,6 @@ local function retryEnableInfiniteStamina(maxAttempts, notifyOnFailure)
     end)
 end
 
--- Toggle in the Movement & Stamina section.
 addRakeToggle(MovementStaminaSection, "Infinite Stamina", function(value)
     infStaminaEnabled = value == true
     _G.InfStamina = infStaminaEnabled
@@ -1557,7 +1556,7 @@ local function instaKillSetupTrap(trapPart)
             end)
 
             local generation = instaKillGeneration
-            task.delay(0.8, function()
+            task.delay(0.7, function()
                 if not instaKillEnabled or generation ~= instaKillGeneration then return end
                 pcall(function() rakeModel:Destroy() end)
             end)
@@ -1703,7 +1702,7 @@ local hideRootWasAnchored = nil
 local hideLockedHumanoid = nil
 local hideHumanoidOriginals = nil
 local hideRespawnPending = false
-local UNDER_FLOOR_OFFSET = 7.5
+local UNDER_FLOOR_OFFSET = 30 -- deeper than the previous 12/20-stud offset
 
 local function getHideFloorY(root)
     local params = RaycastParams.new()
@@ -1928,10 +1927,253 @@ addRakeToggle(RakeSafeSection, "Safe Zone", function(value)
     end
 end)
 
--- Location ESP remains independent from the Scrap and Flare ESP systems.
-local ESPState = {
-    Location = false,
-}
+-- ==========================================
+-- 1. Scrap ESP
+-- ==========================================
+do
+    local scrapESPState = false
+    local activeScrapCache = {}
+    local scrapConnections = {}
+
+    local function getTargetPart(item)
+        if not item then return nil end
+        if item:IsA("BasePart") then return item
+        elseif item:IsA("Model") then return item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart") end
+        return item:FindFirstChildWhichIsA("BasePart")
+    end
+
+    local function isScrapItem(name)
+        return name == "Scrap" or name == "Scraps"
+    end
+
+    local function removeScrapESP(item)
+        if activeScrapCache[item] then
+            pcall(function() if activeScrapCache[item].Billboard then activeScrapCache[item].Billboard:Destroy() end end)
+            activeScrapCache[item] = nil
+        end
+    end
+
+    local function addScrapESP(item)
+        if not scrapESPState or activeScrapCache[item] then return end
+        if not isScrapItem(item.Name) then return end
+        local targetPart = getTargetPart(item)
+        if not targetPart or not targetPart:IsA("BasePart") then return end
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "TheRake2ScrapESP"
+        billboard.Adornee = targetPart
+        billboard.Size = UDim2.fromOffset(160, 32)
+        billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+        billboard.AlwaysOnTop = true
+        billboard.MaxDistance = 2500
+        billboard.Parent = targetPart
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(80, 255, 100)
+        label.TextStrokeTransparency = 0.3
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 13
+        label.Text = "Scraps | 0m"
+        label.Parent = billboard
+
+        activeScrapCache[item] = { Billboard = billboard, Label = label, Part = targetPart }
+        local conn
+        conn = item.AncestryChanged:Connect(function(_, parent)
+            if not parent then
+                removeScrapESP(item)
+                if conn then conn:Disconnect() end
+            end
+        end)
+    end
+
+    local function scanScrapContainer(container)
+        if not container then return end
+        for _, child in ipairs(container:GetChildren()) do
+            addScrapESP(child)
+            for _, sub in ipairs(child:GetChildren()) do
+                addScrapESP(sub)
+                for _, deepSub in ipairs(sub:GetChildren()) do addScrapESP(deepSub) end
+            end
+        end
+    end
+
+    local function clearScrapESP()
+        for _, conn in ipairs(scrapConnections) do pcall(function() conn:Disconnect() end) end
+        table.clear(scrapConnections)
+        for item, _ in pairs(activeScrapCache) do removeScrapESP(item) end
+        table.clear(activeScrapCache)
+    end
+
+    local function startScrapESP()
+        clearScrapESP()
+        if not scrapESPState then return end
+        scanScrapContainer(Workspace)
+        scanScrapContainer(Workspace:FindFirstChild("Debris"))
+        scanScrapContainer(Workspace:FindFirstChild("Filter"))
+
+        table.insert(scrapConnections, Workspace.ChildAdded:Connect(function(child)
+            task.defer(function() addScrapESP(child) scanScrapContainer(child) end)
+        end))
+        local debris = Workspace:FindFirstChild("Debris")
+        if debris then
+            table.insert(scrapConnections, debris.ChildAdded:Connect(function(child)
+                task.defer(function() addScrapESP(child) scanScrapContainer(child) end)
+            end))
+        end
+        local filter = Workspace:FindFirstChild("Filter")
+        if filter then
+            table.insert(scrapConnections, filter.ChildAdded:Connect(function(child)
+                task.defer(function() addScrapESP(child) scanScrapContainer(child) end)
+            end))
+        end
+        table.insert(scrapConnections, RunService.Heartbeat:Connect(function()
+            local root = getRootPart()
+            if not root then return end
+            for item, data in pairs(activeScrapCache) do
+                if item and item.Parent and data.Part and data.Label then
+                    local dist = math.floor((root.Position - data.Part.Position).Magnitude)
+                    data.Label.Text = "Scraps | " .. dist .. "m"
+                else
+                    removeScrapESP(item)
+                end
+            end
+        end))
+    end
+
+    addRakeToggle(VisualObjectESPSection, "Scrap ESP", function(value)
+        scrapESPState = value
+        if scrapESPState then startScrapESP() else clearScrapESP() end
+    end, false)
+end
+
+-- ==========================================
+-- 2. Flare ESP
+-- ==========================================
+do
+    local flareESPState = false
+    local activeFlareCache = {}
+    local flareConnections = {}
+
+    local function getTargetPart(item)
+        if not item then return nil end
+        if item:IsA("BasePart") then return item
+        elseif item:IsA("Model") then return item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart") end
+        return item:FindFirstChildWhichIsA("BasePart")
+    end
+
+    local function isFlareItem(name)
+        local lower = tostring(name or ""):lower()
+        return lower:find("flare", 1, true) ~= nil
+    end
+
+    local function removeFlareESP(item)
+        if activeFlareCache[item] then
+            pcall(function() if activeFlareCache[item].Billboard then activeFlareCache[item].Billboard:Destroy() end end)
+            activeFlareCache[item] = nil
+        end
+    end
+
+    local function addFlareESP(item)
+        if not flareESPState or activeFlareCache[item] then return end
+        if not isFlareItem(item.Name) then return end
+        local targetPart = getTargetPart(item)
+        if not targetPart or not targetPart:IsA("BasePart") then return end
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "TheRake2FlareESP"
+        billboard.Adornee = targetPart
+        billboard.Size = UDim2.fromOffset(160, 32)
+        billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+        billboard.AlwaysOnTop = true
+        billboard.MaxDistance = 2500
+        billboard.Parent = targetPart
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(80, 160, 255)
+        label.TextStrokeTransparency = 0.3
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 13
+        label.Text = "Flaregun | 0m"
+        label.Parent = billboard
+
+        activeFlareCache[item] = { Billboard = billboard, Label = label, Part = targetPart }
+        local conn
+        conn = item.AncestryChanged:Connect(function(_, parent)
+            if not parent then
+                removeFlareESP(item)
+                if conn then conn:Disconnect() end
+            end
+        end)
+    end
+
+    local function scanFlareContainer(container)
+        if not container then return end
+        for _, child in ipairs(container:GetChildren()) do
+            addFlareESP(child)
+            for _, sub in ipairs(child:GetChildren()) do
+                addFlareESP(sub)
+                for _, deepSub in ipairs(sub:GetChildren()) do addFlareESP(deepSub) end
+            end
+        end
+    end
+
+    local function clearFlareESP()
+        for _, conn in ipairs(flareConnections) do pcall(function() conn:Disconnect() end) end
+        table.clear(flareConnections)
+        for item, _ in pairs(activeFlareCache) do removeFlareESP(item) end
+        table.clear(activeFlareCache)
+    end
+
+    local function startFlareESP()
+        clearFlareESP()
+        if not flareESPState then return end
+        scanFlareContainer(Workspace)
+        scanFlareContainer(Workspace:FindFirstChild("Debris"))
+        scanFlareContainer(Workspace:FindFirstChild("Filter"))
+
+        table.insert(flareConnections, Workspace.ChildAdded:Connect(function(child)
+            task.defer(function() addFlareESP(child) scanFlareContainer(child) end)
+        end))
+        local debris = Workspace:FindFirstChild("Debris")
+        if debris then
+            table.insert(flareConnections, debris.ChildAdded:Connect(function(child)
+                task.defer(function() addFlareESP(child) scanFlareContainer(child) end)
+            end))
+        end
+        local filter = Workspace:FindFirstChild("Filter")
+        if filter then
+            table.insert(flareConnections, filter.ChildAdded:Connect(function(child)
+                task.defer(function() addFlareESP(child) scanFlareContainer(child) end)
+            end))
+        end
+        table.insert(flareConnections, RunService.Heartbeat:Connect(function()
+            local root = getRootPart()
+            if not root then return end
+            for item, data in pairs(activeFlareCache) do
+                if item and item.Parent and data.Part and data.Label then
+                    local dist = math.floor((root.Position - data.Part.Position).Magnitude)
+                    data.Label.Text = "Flaregun | " .. dist .. "m"
+                else
+                    removeFlareESP(item)
+                end
+            end
+        end))
+    end
+
+    addRakeToggle(VisualObjectESPSection, "Flare ESP", function(value)
+        flareESPState = value
+        if flareESPState then startFlareESP() else clearFlareESP() end
+    end, false)
+end
+
+-- ==========================================
+-- Location ESP (kept separate from Scrap / Flare ESP)
+-- ==========================================
+local ESPState = { Location = false }
 local RayESPObjects = {}
 local RayLocations = {
     SHOP = true,
@@ -1975,16 +2217,15 @@ end
 local function updateRayESP()
     clearRayESP()
     if not ESPState.Location then return end
-    local root = getRootPart()
     for _, item in ipairs(Workspace:GetDescendants()) do
         local rawName = tostring(item.Name)
-        if item:IsA("BasePart") then
-            if RayLocations[rawName:upper()] then
+        if RayLocations[rawName:upper()] then
+            if item:IsA("BasePart") then
                 createRayBillboard(item, rawName, Color3.fromRGB(200, 200, 255), "TheRake2LocationESP")
+            else
+                local part = item:IsA("Model") and (item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")) or item:FindFirstChildWhichIsA("BasePart")
+                if part then createRayBillboard(part, rawName, Color3.fromRGB(200, 200, 255), "TheRake2LocationESP") end
             end
-        elseif RayLocations[rawName:upper()] then
-            local part = item:IsA("Model") and (item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")) or item:FindFirstChildWhichIsA("BasePart")
-            if part then createRayBillboard(part, rawName, Color3.fromRGB(200, 200, 255), "TheRake2LocationESP") end
         end
     end
 end
@@ -1992,314 +2233,11 @@ end
 addRakeToggle(VisualLocationsSection, "Location ESP", function(value)
     ESPState.Location = value == true
     if not ESPState.Location then clearRayESP() end
-end, false)
+end)
+
 
 -- ==========================================
--- Scrap ESP (independent, continuously updated)
--- ==========================================
-do
-    local scrapESPState = false
-    local activeScrapCache = {}
-    local scrapConnections = {}
-
-    local function getTargetPart(item)
-        if not item then return nil end
-        if item:IsA("BasePart") then
-            return item
-        elseif item:IsA("Model") then
-            return item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
-        end
-        return item:FindFirstChildWhichIsA("BasePart")
-    end
-
-    local function isScrapItem(name)
-        local lower = tostring(name or ""):lower()
-        return lower == "scrap" or lower:find("scrap", 1, true) ~= nil
-    end
-
-    local function removeScrapESP(item)
-        if activeScrapCache[item] then
-            pcall(function()
-                if activeScrapCache[item].Billboard then
-                    activeScrapCache[item].Billboard:Destroy()
-                end
-            end)
-            activeScrapCache[item] = nil
-        end
-    end
-
-    local function addScrapESP(item)
-        if not scrapESPState or activeScrapCache[item] then return end
-        if not item or not isScrapItem(item.Name) then return end
-
-        local targetPart = getTargetPart(item)
-        if not targetPart or not targetPart:IsA("BasePart") then return end
-
-        local billboard = Instance.new("BillboardGui")
-        billboard.Name = "TheRake2ScrapESP"
-        billboard.Adornee = targetPart
-        billboard.Size = UDim2.fromOffset(160, 32)
-        billboard.StudsOffset = Vector3.new(0, 2.5, 0)
-        billboard.AlwaysOnTop = true
-        billboard.MaxDistance = 2500
-        billboard.Parent = targetPart
-
-        local label = Instance.new("TextLabel")
-        label.Size = UDim2.fromScale(1, 1)
-        label.BackgroundTransparency = 1
-        label.TextColor3 = Color3.fromRGB(80, 255, 100)
-        label.TextStrokeTransparency = 0.3
-        label.Font = Enum.Font.GothamBold
-        label.TextSize = 13
-        label.Text = item.Name .. " | 0m"
-        label.Parent = billboard
-
-        activeScrapCache[item] = { Billboard = billboard, Label = label, Part = targetPart }
-
-        local conn
-        conn = item.AncestryChanged:Connect(function(_, parent)
-            if not parent then
-                removeScrapESP(item)
-                if conn then conn:Disconnect() end
-            end
-        end)
-    end
-
-    local function scanScrapContainer(container)
-        if not container then return end
-        for _, child in ipairs(container:GetChildren()) do
-            addScrapESP(child)
-            for _, sub in ipairs(child:GetChildren()) do
-                addScrapESP(sub)
-            end
-        end
-    end
-
-    local function clearScrapESP()
-        for _, conn in ipairs(scrapConnections) do
-            pcall(function() conn:Disconnect() end)
-        end
-        table.clear(scrapConnections)
-
-        for item in pairs(activeScrapCache) do
-            removeScrapESP(item)
-        end
-        table.clear(activeScrapCache)
-    end
-
-    local function startScrapESP()
-        clearScrapESP()
-        if not scrapESPState then return end
-
-        scanScrapContainer(Workspace)
-        scanScrapContainer(Workspace:FindFirstChild("Debris"))
-        scanScrapContainer(Workspace:FindFirstChild("Filter"))
-
-        table.insert(scrapConnections, Workspace.ChildAdded:Connect(function(child)
-            task.defer(function()
-                addScrapESP(child)
-                scanScrapContainer(child)
-            end)
-        end))
-
-        local debris = Workspace:FindFirstChild("Debris")
-        if debris then
-            table.insert(scrapConnections, debris.ChildAdded:Connect(function(child)
-                task.defer(function()
-                    addScrapESP(child)
-                    scanScrapContainer(child)
-                end)
-            end))
-        end
-
-        local filter = Workspace:FindFirstChild("Filter")
-        if filter then
-            table.insert(scrapConnections, filter.ChildAdded:Connect(function(child)
-                task.defer(function()
-                    addScrapESP(child)
-                    scanScrapContainer(child)
-                end)
-            end))
-        end
-
-        table.insert(scrapConnections, RunService.Heartbeat:Connect(function()
-            local root = getRootPart()
-            if not root then return end
-            for item, data in pairs(activeScrapCache) do
-                if item and item.Parent and data.Part and data.Label and data.Part.Parent then
-                    local dist = math.floor((root.Position - data.Part.Position).Magnitude)
-                    data.Label.Text = item.Name .. " | " .. dist .. "m"
-                else
-                    removeScrapESP(item)
-                end
-            end
-        end))
-    end
-
-    addRakeToggle(VisualObjectESPSection, "Scrap ESP", function(value)
-        scrapESPState = value == true
-        if scrapESPState then
-            startScrapESP()
-        else
-            clearScrapESP()
-        end
-    end, false)
-end
-
--- ==========================================
--- Flare ESP (independent, continuously updated)
--- ==========================================
-do
-    local flareESPState = false
-    local activeFlareCache = {}
-    local flareConnections = {}
-
-    local function getTargetPart(item)
-        if not item then return nil end
-        if item:IsA("BasePart") then
-            return item
-        elseif item:IsA("Model") then
-            return item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
-        end
-        return item:FindFirstChildWhichIsA("BasePart")
-    end
-
-    local function isFlareItem(name)
-        local lower = tostring(name or ""):lower()
-        return lower:find("flare", 1, true) ~= nil
-    end
-
-    local function removeFlareESP(item)
-        if activeFlareCache[item] then
-            pcall(function()
-                if activeFlareCache[item].Billboard then
-                    activeFlareCache[item].Billboard:Destroy()
-                end
-            end)
-            activeFlareCache[item] = nil
-        end
-    end
-
-    local function addFlareESP(item)
-        if not flareESPState or activeFlareCache[item] then return end
-        if not item or not isFlareItem(item.Name) then return end
-
-        local targetPart = getTargetPart(item)
-        if not targetPart or not targetPart:IsA("BasePart") then return end
-
-        local billboard = Instance.new("BillboardGui")
-        billboard.Name = "TheRake2FlareESP"
-        billboard.Adornee = targetPart
-        billboard.Size = UDim2.fromOffset(160, 32)
-        billboard.StudsOffset = Vector3.new(0, 2.5, 0)
-        billboard.AlwaysOnTop = true
-        billboard.MaxDistance = 2500
-        billboard.Parent = targetPart
-
-        local label = Instance.new("TextLabel")
-        label.Size = UDim2.fromScale(1, 1)
-        label.BackgroundTransparency = 1
-        label.TextColor3 = Color3.fromRGB(80, 160, 255)
-        label.TextStrokeTransparency = 0.3
-        label.Font = Enum.Font.GothamBold
-        label.TextSize = 13
-        label.Text = item.Name .. " | 0m"
-        label.Parent = billboard
-
-        activeFlareCache[item] = { Billboard = billboard, Label = label, Part = targetPart }
-
-        local conn
-        conn = item.AncestryChanged:Connect(function(_, parent)
-            if not parent then
-                removeFlareESP(item)
-                if conn then conn:Disconnect() end
-            end
-        end)
-    end
-
-    local function scanFlareContainer(container)
-        if not container then return end
-        for _, child in ipairs(container:GetChildren()) do
-            addFlareESP(child)
-            for _, sub in ipairs(child:GetChildren()) do
-                addFlareESP(sub)
-            end
-        end
-    end
-
-    local function clearFlareESP()
-        for _, conn in ipairs(flareConnections) do
-            pcall(function() conn:Disconnect() end)
-        end
-        table.clear(flareConnections)
-
-        for item in pairs(activeFlareCache) do
-            removeFlareESP(item)
-        end
-        table.clear(activeFlareCache)
-    end
-
-    local function startFlareESP()
-        clearFlareESP()
-        if not flareESPState then return end
-
-        scanFlareContainer(Workspace)
-        scanFlareContainer(Workspace:FindFirstChild("Debris"))
-        scanFlareContainer(Workspace:FindFirstChild("Filter"))
-
-        table.insert(flareConnections, Workspace.ChildAdded:Connect(function(child)
-            task.defer(function()
-                addFlareESP(child)
-                scanFlareContainer(child)
-            end)
-        end))
-
-        local debris = Workspace:FindFirstChild("Debris")
-        if debris then
-            table.insert(flareConnections, debris.ChildAdded:Connect(function(child)
-                task.defer(function()
-                    addFlareESP(child)
-                    scanFlareContainer(child)
-                end)
-            end))
-        end
-
-        local filter = Workspace:FindFirstChild("Filter")
-        if filter then
-            table.insert(flareConnections, filter.ChildAdded:Connect(function(child)
-                task.defer(function()
-                    addFlareESP(child)
-                    scanFlareContainer(child)
-                end)
-            end))
-        end
-
-        table.insert(flareConnections, RunService.Heartbeat:Connect(function()
-            local root = getRootPart()
-            if not root then return end
-            for item, data in pairs(activeFlareCache) do
-                if item and item.Parent and data.Part and data.Label and data.Part.Parent then
-                    local dist = math.floor((root.Position - data.Part.Position).Magnitude)
-                    data.Label.Text = item.Name .. " | " .. dist .. "m"
-                else
-                    removeFlareESP(item)
-                end
-            end
-        end))
-    end
-
-    addRakeToggle(VisualObjectESPSection, "Flare ESP", function(value)
-        flareESPState = value == true
-        if flareESPState then
-            startFlareESP()
-        else
-            clearFlareESP()
-        end
-    end, false)
-end
-
--- ==========================================
--- Trap ESP (event-driven)
+-- 3. Trap ESP
 -- ==========================================
 do
     local trapESPState = false
@@ -2314,17 +2252,13 @@ do
 
     local function getTargetPart(item)
         if not item then return nil end
-        if item:IsA("BasePart") then
-            return item
-        elseif item:IsA("Model") then
-            return item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
-        end
+        if item:IsA("BasePart") then return item
+        elseif item:IsA("Model") then return item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart") end
         return item:FindFirstChildWhichIsA("BasePart")
     end
 
     local function createTrapESP(item)
-        if not trapESPState or activeTrapESPCache[item] then return end
-        if not isTargetTrap(item) then return end
+        if activeTrapESPCache[item] then return end
         local targetPart = getTargetPart(item)
         if not targetPart or not targetPart:IsA("BasePart") then return end
 
@@ -2348,7 +2282,6 @@ do
         label.Parent = billboard
 
         activeTrapESPCache[item] = { Billboard = billboard, Label = label, Part = targetPart }
-
         local conn
         conn = item.AncestryChanged:Connect(function(_, parent)
             if not parent then
@@ -2360,15 +2293,10 @@ do
     end
 
     local function clearTrapESP()
-        for _, conn in ipairs(trapConnections) do
-            pcall(function() conn:Disconnect() end)
-        end
+        for _, conn in ipairs(trapConnections) do pcall(function() conn:Disconnect() end) end
         table.clear(trapConnections)
-
-        for _, entry in pairs(activeTrapESPCache) do
-            pcall(function()
-                if entry and entry.Billboard then entry.Billboard:Destroy() end
-            end)
+        for item, entry in pairs(activeTrapESPCache) do
+            pcall(function() if entry and entry.Billboard then entry.Billboard:Destroy() end end)
         end
         table.clear(activeTrapESPCache)
     end
@@ -2395,9 +2323,7 @@ do
 
         table.insert(trapConnections, Workspace.ChildAdded:Connect(function(child)
             if not trapESPState then return end
-            task.defer(function()
-                if isTargetTrap(child) then createTrapESP(child) end
-            end)
+            task.defer(function() if isTargetTrap(child) then createTrapESP(child) end end)
         end))
 
         local debris = Workspace:FindFirstChild("Debris")
@@ -2419,7 +2345,7 @@ do
                 local root = getRootPart()
                 if root then
                     for item, entry in pairs(activeTrapESPCache) do
-                        if item and item.Parent and entry and entry.Part and entry.Label and entry.Part.Parent then
+                        if item and item.Parent and entry and entry.Part and entry.Label then
                             local dist = math.floor((root.Position - entry.Part.Position).Magnitude)
                             entry.Label.Text = item.Name .. " | " .. dist .. "m"
                         end
@@ -2430,12 +2356,7 @@ do
     end
 
     addRakeToggle(VisualTrapESPSection, "Enable ESP Traps", function(value)
-        if value then
-            enableTrapESP()
-        else
-            trapESPState = false
-            clearTrapESP()
-        end
+        if value then enableTrapESP() else trapESPState = false clearTrapESP() end
     end, false)
 end
 
@@ -3309,7 +3230,6 @@ local function createRakeESP(model)
     newVariantTag.Parent = model
 end
 
--- Find exact-name active Rake models only in Workspace and its main game folders.
 local function getActiveRakeModels()
     local rakes, seen = {}, {}
     local function addIfRake(obj)
@@ -3347,8 +3267,14 @@ local function createESP(model)
         return
     end
 
-    -- Rake ESP is managed only by getActiveRakeModels() and its dedicated listeners.
-    if isExactRake(model) then return end
+    if isExactRake(model) then
+        if ESP_SETTINGS.showRake then
+            createRakeESP(model)
+        else
+            removeRakeESP(model)
+        end
+        return
+    end
 
     -- Keep player ESP separate from Rake ESP and its variants.
     if not player then
@@ -3457,7 +3383,7 @@ local function refreshAllHighlights()
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Model") then
             local player = Players:GetPlayerFromCharacter(obj)
-            local isRakeModel = isExactRake(obj)
+            local exactRake = isExactRake(obj)
             local categoryTag = obj:FindFirstChild("ESP_Category")
             local variantTag = obj:FindFirstChild("ESP_Variant")
             local hasVisual = obj:FindFirstChild("ESP_Highlight") or obj:FindFirstChild("ESP_Square")
@@ -3471,7 +3397,16 @@ local function refreshAllHighlights()
                 elseif categoryTag then
                     removeModelESP(obj)
                 end
-            elseif not isRakeModel and categoryTag then
+            elseif exactRake then
+                if ESP_SETTINGS.showRake then
+                    if not hasVisual or not categoryTag or categoryTag.Value ~= "rake"
+                        or not variantTag or variantTag.Value ~= (ESP_SETTINGS.rakeVariant or "Chams") then
+                        pcall(createRakeESP, obj)
+                    end
+                elseif categoryTag then
+                    removeRakeESP(obj)
+                end
+            elseif categoryTag then
                 removeModelESP(obj)
             end
         end
@@ -3490,13 +3425,17 @@ end
 addRakeDropdown(VisualESPSection, "The Rake ESP Variant", {"Chams", "Outline", "Square"}, "Chams", function(value)
     if value ~= "Chams" and value ~= "Outline" and value ~= "Square" then value = "Chams" end
     ESP_SETTINGS.rakeVariant = value
+    for _, model in ipairs(Workspace:GetDescendants()) do
+        if isExactRake(model) then
+            removeRakeESP(model)
+        end
+    end
     for _, model in ipairs(getActiveRakeModels()) do
         removeRakeESP(model)
     end
     refreshAllHighlights()
 end)
 
--- Rake ESP maintenance: poll active game folders every 0.5 seconds.
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -3506,6 +3445,7 @@ task.spawn(function()
                     local hasVisual = model:FindFirstChild("ESP_Highlight") or model:FindFirstChild("ESP_Square")
                     local categoryTag = model:FindFirstChild("ESP_Category")
                     local variantTag = model:FindFirstChild("ESP_Variant")
+
                     if not hasVisual or not categoryTag or categoryTag.Value ~= "rake"
                         or not variantTag or variantTag.Value ~= (ESP_SETTINGS.rakeVariant or "Chams") then
                         createRakeESP(model)
