@@ -1,0 +1,948 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+
+local LP = Players.LocalPlayer
+local PlayerGui = LP:WaitForChild("PlayerGui")
+
+-- Load Bolong UI Library
+local Chloex = loadstring(game:HttpGet("https://raw.githubusercontent.com/RillBoys/bolong.catui/refs/heads/main/b0lngUi.lua"))()
+
+local VERSION = "v4.2.0 - The Rake Full Edition"
+local ACCENT_COLOR = Color3.fromRGB(0, 240, 160)
+
+local function Notify(title, content, delay)
+    if Chloex and Chloex.MakeNotify then
+        pcall(function()
+            Chloex:MakeNotify({
+                Title = title or "BOLONG-HUB",
+                Description = "The Rake",
+                Content = content or "",
+                Color = ACCENT_COLOR,
+                Time = 0.4,
+                Delay = delay or 2.5
+            })
+        end)
+    end
+end
+
+--------------------------------------------------------------------
+-- NEVERWIN LOCATIONS & WORLD DATA
+--------------------------------------------------------------------
+local LOCATIONS = {
+    SafeHouse    = Vector3.new(-363.491, 16.8744, 70.3037),
+    PowerStation = Vector3.new(-281.6848, 21.5082, -212.7473),
+    BaseCamp     = Vector3.new(-70.7133, 17.6142, 209.0067),
+    Shop         = Vector3.new(-25.1567, 17.2076, -258.362),
+    SafeSky      = Vector3.new(-363.491, 160.0, 70.3037),
+}
+
+-- Character & Rake Helpers
+local function getChar() return LP.Character end
+local function getRoot()
+    local c = getChar()
+    return c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso") or c:FindFirstChild("UpperTorso"))
+end
+local function getHum()
+    local c = getChar()
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+local function getRake()
+    return Workspace:FindFirstChild("Rake") or Workspace:FindFirstChild("The Rake")
+end
+local function getRakeRoot()
+    local r = getRake()
+    return r and (r:FindFirstChild("HumanoidRootPart") or r:FindFirstChild("Torso") or r:FindFirstChild("Head"))
+end
+local function getRakeHum()
+    local r = getRake()
+    return r and r:FindFirstChildOfClass("Humanoid")
+end
+local function getFlareGun()
+    return Workspace:FindFirstChild("FlareGun") or Workspace:FindFirstChild("FlareGunPickUp")
+end
+
+--------------------------------------------------------------------
+-- CONFIGURATION STATES
+--------------------------------------------------------------------
+local Config = {
+    -- Combat & Insta Kill
+    FlingRake = false,
+    FlingOut = 220,
+    FlingUp = 200,
+    AutoKillLoop = false,
+    AutoStun = false,
+    StunRadius = 16,
+    AutoSafeDoor = false,
+    HitboxSize = 1,
+    SilentAim = false,
+    
+    -- Exploits & Automation
+    BypassShock = false,
+    AntiTrap = false,
+    AutoTrapRake = false,
+    InstaCrate = false,
+    AutoFlare = false,
+    AutoShootFlare = false,
+    AutoScrap = false,
+    
+    -- Visuals / ESP
+    RakeESP = false,
+    RakeTracer = false,
+    PlayerESP = false,
+    FlareESP = false,
+    ScrapESP = false,
+    LocationESP = false,
+    FullBright = false,
+    NoFog = false,
+    NightVision = false,
+    
+    -- Movement & Godmode
+    WalkSpeed = 16,
+    EnableSpeed = false,
+    JumpPower = 50,
+    EnableJump = false,
+    InfStamina = false,
+    NoFallDamage = false,
+    AntiRagdoll = false,
+    Noclip = false,
+    DoorNoclip = false,
+    Fly = false,
+    FlySpeed = 50,
+    FloatPad = false,
+    
+    -- Misc
+    AntiAfk = false,
+    MuteScream = false
+}
+
+--------------------------------------------------------------------
+-- 1. INSTA KILL & FLING RAKE SYSTEM (NEVERWIN CORE EXPLOIT)
+--------------------------------------------------------------------
+local lastFlingTick = 0
+RunService.Heartbeat:Connect(function()
+    if Config.FlingRake then
+        if typeof(sethiddenproperty) == "function" then
+            pcall(sethiddenproperty, LP, "SimulationRadius", 2000)
+        end
+        local r = getRake()
+        local root = r and r:FindFirstChild("HumanoidRootPart")
+        local pRoot = getRoot()
+        if root and pRoot and (tick() - lastFlingTick > 0.3) then
+            lastFlingTick = tick()
+            local away = (root.Position - pRoot.Position)
+            away = Vector3.new(away.X, 0, away.Z)
+            away = away.Magnitude > 0.1 and away.Unit or Vector3.new(0, 0, 1)
+            
+            local hum = getRakeHum()
+            pcall(function()
+                if hum then hum:ChangeState(Enum.HumanoidStateType.FallingDown) end
+                root.AssemblyLinearVelocity = away * Config.FlingOut + Vector3.new(0, Config.FlingUp, 0)
+                root.AssemblyAngularVelocity = Vector3.new(100, 100, 100)
+            end)
+        end
+    end
+end)
+
+-- Auto Kill Rake Loop (StunStick Spammer + Aura)
+RunService.Heartbeat:Connect(function()
+    if Config.AutoKillLoop or Config.AutoStun then
+        local pRoot = getRoot()
+        local rRoot = getRakeRoot()
+        local rake = getRake()
+        if pRoot and rRoot and rake then
+            local dist = (pRoot.Position - rRoot.Position).Magnitude
+            local maxDist = Config.AutoKillLoop and 40 or Config.StunRadius
+            if dist <= maxDist then
+                local char = getChar()
+                local tool = char and char:FindFirstChildOfClass("Tool")
+                if not (tool and tool.Name:find("Stun")) then
+                    local bpTool = LP.Backpack:FindFirstChild("StunStick") or LP.Backpack:FindFirstChildOfClass("Tool")
+                    if bpTool and char and char:FindFirstChild("Humanoid") then
+                        char.Humanoid:EquipTool(bpTool)
+                        tool = bpTool
+                    end
+                end
+                if tool then
+                    pcall(function()
+                        tool:Activate()
+                        local event = tool:FindFirstChild("RemoteEvent") or tool:FindFirstChildOfClass("RemoteEvent")
+                        if event then
+                            event:FireServer("S")
+                            event:FireServer("H", rRoot)
+                        end
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+-- Auto Safe House Door
+RunService.Heartbeat:Connect(function()
+    if Config.AutoSafeDoor then
+        local rakeRoot = getRakeRoot()
+        if rakeRoot then
+            local dist = (rakeRoot.Position - LOCATIONS.SafeHouse).Magnitude
+            if dist <= 60 then
+                local door = Workspace:FindFirstChild("SafeHouseDoor") or Workspace:FindFirstChild("Door")
+                if door and door:FindFirstChild("ClickDetector") then
+                    fireclickdetector(door.ClickDetector)
+                end
+            end
+        end
+    end
+end)
+
+--------------------------------------------------------------------
+-- 2. EXPLOITS: GENERATOR, TRAPS & CRATES
+--------------------------------------------------------------------
+-- Instant Power Generator Repair
+local function instantRepairStation()
+    local powerStation = Workspace:FindFirstChild("PowerStation") or Workspace
+    local count = 0
+    for _, part in ipairs(powerStation:GetDescendants()) do
+        if part:IsA("ClickDetector") or part:IsA("ProximityPrompt") then
+            if part:IsA("ClickDetector") then
+                fireclickdetector(part)
+                count = count + 1
+            elseif part:IsA("ProximityPrompt") then
+                if typeof(fireproximityprompt) == "function" then
+                    fireproximityprompt(part)
+                    count = count + 1
+                end
+            end
+        end
+    end
+    Notify("Power Station", "Activated " .. tostring(count) .. " levers/switches!", 2.5)
+end
+
+-- Bypass Electric Shock
+RunService.Heartbeat:Connect(function()
+    if Config.BypassShock then
+        local station = Workspace:FindFirstChild("PowerStation") or Workspace
+        for _, part in ipairs(station:GetDescendants()) do
+            if part.Name:find("Shock") or part.Name:find("Electric") then
+                if part:IsA("BasePart") then
+                    part.CanTouch = false
+                end
+            end
+        end
+    end
+end)
+
+-- Anti Bear Traps (Immunity)
+RunService.Stepped:Connect(function()
+    if Config.AntiTrap then
+        local traps = Workspace:FindFirstChild("Traps") or Workspace
+        for _, obj in ipairs(traps:GetDescendants()) do
+            if obj.Name:find("Trap") and obj:IsA("BasePart") then
+                obj.CanTouch = false
+            end
+        end
+    end
+end)
+
+-- Auto Teleport Traps to Rake
+local function trapRakeNow()
+    local rakeRoot = getRakeRoot()
+    local traps = Workspace:FindFirstChild("Traps") or Workspace
+    if rakeRoot then
+        local moved = 0
+        for _, obj in ipairs(traps:GetDescendants()) do
+            if obj.Name:find("Trap") and obj:IsA("BasePart") and not obj.Anchored then
+                obj.CFrame = rakeRoot.CFrame
+                moved = moved + 1
+            end
+        end
+        Notify("Auto Trap", "Moved " .. tostring(moved) .. " traps under Rake!", 2)
+    else
+        Notify("Auto Trap", "No Rake found", 2)
+    end
+end
+
+-- Instant Open Crates
+local function instantOpenAllCrates()
+    local crates = Workspace:FindFirstChild("Debris") or Workspace
+    local count = 0
+    for _, obj in ipairs(crates:GetDescendants()) do
+        if obj.Name:find("Crate") or obj.Name:find("Box") then
+            local cd = obj:FindFirstChildOfClass("ClickDetector")
+            if cd then
+                fireclickdetector(cd)
+                count = count + 1
+            end
+        end
+    end
+    Notify("Instant Crates", "Opened " .. tostring(count) .. " crates!", 2)
+end
+
+-- Auto Shoot Flare at Rake
+local function autoShootFlare()
+    local flare = LP.Backpack:FindFirstChild("FlareGun") or (getChar() and getChar():FindFirstChild("FlareGun"))
+    local rakeRoot = getRakeRoot()
+    if flare and rakeRoot then
+        local char = getChar()
+        if char and not char:FindFirstChild("FlareGun") then
+            char.Humanoid:EquipTool(flare)
+            wait(0.2)
+        end
+        local event = flare:FindFirstChild("RemoteEvent") or flare:FindFirstChildOfClass("RemoteEvent")
+        if event then
+            event:FireServer(rakeRoot.Position)
+            Notify("Flare Gun", "Fired directly at Rake!", 2)
+        end
+    else
+        Notify("Flare Gun", "Flare gun or Rake not ready", 2)
+    end
+end
+
+--------------------------------------------------------------------
+-- 3. VISUALS & ESP (RAKE, PLAYERS, ITEMS)
+--------------------------------------------------------------------
+local ESP_Folder = Instance.new("Folder")
+ESP_Folder.Name = "Bolong_TheRake_ESP"
+ESP_Folder.Parent = Workspace
+
+local function makeHighlight(target, color, text)
+    if not target then return nil end
+    local hl = Instance.new("Highlight")
+    hl.Name = "ESP_HL"
+    hl.Adornee = target
+    hl.FillColor = color
+    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+    hl.FillTransparency = 0.5
+    hl.Parent = ESP_Folder
+    
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ESP_BB"
+    bb.Adornee = target
+    bb.Size = UDim2.new(0, 160, 0, 45)
+    bb.StudsOffset = Vector3.new(0, 3, 0)
+    bb.AlwaysOnTop = true
+    bb.Parent = ESP_Folder
+    
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = text or target.Name
+    lbl.TextColor3 = color
+    lbl.TextStrokeTransparency = 0
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 13
+    lbl.Parent = bb
+    
+    return hl, bb, lbl
+end
+
+local rakeHL, rakeBB, rakeLbl
+RunService.RenderStepped:Connect(function()
+    local r = getRake()
+    local rRoot = getRakeRoot()
+    local pRoot = getRoot()
+    
+    if Config.RakeESP and r and rRoot then
+        if not rakeHL or rakeHL.Adornee ~= r then
+            if rakeHL then rakeHL:Destroy() end
+            if rakeBB then rakeBB:Destroy() end
+            rakeHL, rakeBB, rakeLbl = makeHighlight(r, Color3.fromRGB(255, 30, 30), "THE RAKE")
+        end
+        if rakeLbl and pRoot then
+            local dist = math.floor((pRoot.Position - rRoot.Position).Magnitude)
+            local hum = getRakeHum()
+            local hp = hum and math.floor(hum.Health) or 100
+            rakeLbl.Text = string.format("👹 THE RAKE [%dm]\nHP: %s", dist, tostring(hp))
+        end
+    else
+        if rakeHL then rakeHL:Destroy(); rakeHL = nil end
+        if rakeBB then rakeBB:Destroy(); rakeBB = nil end
+    end
+end)
+
+-- Location ESP Markers
+local locationBBs = {}
+local function updateLocationESP()
+    for _, bb in pairs(locationBBs) do bb:Destroy() end
+    locationBBs = {}
+    if not Config.LocationESP then return end
+    
+    for name, pos in pairs(LOCATIONS) do
+        local part = Instance.new("Part")
+        part.Size = Vector3.new(1, 1, 1)
+        part.Position = pos
+        part.Anchored = true
+        part.CanCollide = false
+        part.Transparency = 1
+        part.Parent = ESP_Folder
+        
+        local bb = Instance.new("BillboardGui")
+        bb.Adornee = part
+        bb.Size = UDim2.new(0, 130, 0, 30)
+        bb.AlwaysOnTop = true
+        bb.Parent = ESP_Folder
+        
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, 0, 1, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = "📍 " .. name
+        lbl.TextColor3 = Color3.fromRGB(80, 220, 255)
+        lbl.TextStrokeTransparency = 0
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 12
+        lbl.Parent = bb
+        
+        table.insert(locationBBs, bb)
+        table.insert(locationBBs, part)
+    end
+end
+
+-- Lighting (FullBright & No Fog)
+local origLighting = {
+    Ambient = Lighting.Ambient,
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart
+}
+
+local function applyLighting()
+    if Config.FullBright then
+        Lighting.Ambient = Color3.fromRGB(220, 220, 220)
+        Lighting.Brightness = 2.5
+        Lighting.ClockTime = 14
+    else
+        Lighting.Ambient = origLighting.Ambient
+        Lighting.Brightness = origLighting.Brightness
+        Lighting.ClockTime = origLighting.ClockTime
+    end
+    
+    if Config.NoFog then
+        Lighting.FogEnd = 100000
+        Lighting.FogStart = 0
+    else
+        Lighting.FogEnd = origLighting.FogEnd
+        Lighting.FogStart = origLighting.FogStart
+    end
+end
+
+--------------------------------------------------------------------
+-- 4. MOVEMENT, GODMODE & FLIGHT
+--------------------------------------------------------------------
+RunService.Heartbeat:Connect(function()
+    local hum = getHum()
+    if hum then
+        if Config.EnableSpeed then hum.WalkSpeed = Config.WalkSpeed end
+        if Config.EnableJump then hum.JumpPower = Config.JumpPower end
+    end
+    
+    -- Infinite Stamina
+    if Config.InfStamina then
+        local char = getChar()
+        local st = char and (char:FindFirstChild("Stamina") or char:FindFirstChild("stamina"))
+        if st and st:IsA("NumberValue") then st.Value = 100 end
+    end
+    
+    -- No Fall Damage (Keep velocity within safe impact threshold)
+    if Config.NoFallDamage then
+        local root = getRoot()
+        if root and root.AssemblyLinearVelocity.Y < -45 then
+            root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, -20, root.AssemblyLinearVelocity.Z)
+        end
+    end
+end)
+
+-- Noclip & Door Noclip
+RunService.Stepped:Connect(function()
+    local c = getChar()
+    if Config.Noclip and c then
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
+    if Config.DoorNoclip then
+        local door = Workspace:FindFirstChild("SafeHouseDoor") or Workspace:FindFirstChild("Door")
+        if door then
+            for _, p in ipairs(door:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = false end
+            end
+        end
+    end
+end)
+
+-- Float Platform
+local floatPart
+local function toggleFloatPad(on)
+    if on then
+        local root = getRoot()
+        if root then
+            floatPart = Instance.new("Part")
+            floatPart.Size = Vector3.new(8, 1, 8)
+            floatPart.Position = root.Position - Vector3.new(0, 3.5, 0)
+            floatPart.Anchored = true
+            floatPart.Transparency = 0.5
+            floatPart.Color = Color3.fromRGB(0, 240, 160)
+            floatPart.Parent = Workspace
+        end
+    else
+        if floatPart then floatPart:Destroy(); floatPart = nil end
+    end
+end
+
+-- 3D Flight System
+local flyBV, flyBG
+RunService.RenderStepped:Connect(function()
+    local root = getRoot()
+    local cam = Workspace.CurrentCamera
+    if Config.Fly and root and cam then
+        if not flyBV or not flyBV.Parent then
+            flyBV = Instance.new("BodyVelocity")
+            flyBV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+            flyBV.Parent = root
+        end
+        if not flyBG or not flyBG.Parent then
+            flyBG = Instance.new("BodyGyro")
+            flyBG.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+            flyBG.CFrame = root.CFrame
+            flyBG.Parent = root
+        end
+        
+        flyBG.CFrame = cam.CFrame
+        local dir = Vector3.new(0, 0, 0)
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0, 1, 0) end
+        
+        flyBV.Velocity = dir * Config.FlySpeed
+    else
+        if flyBV then flyBV:Destroy(); flyBV = nil end
+        if flyBG then flyBG:Destroy(); flyBG = nil end
+    end
+end)
+
+--------------------------------------------------------------------
+-- 5. TELEPORTS
+--------------------------------------------------------------------
+local function teleportTo(pos)
+    local root = getRoot()
+    if root then
+        root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+        Notify("Teleport", "Success!", 1.5)
+    end
+end
+
+local function grabFlareGun()
+    local flare = getFlareGun()
+    local root = getRoot()
+    if flare and root then
+        local flarePart = flare:FindFirstChild("Handle") or flare:FindFirstChildOfClass("BasePart") or flare
+        if flarePart then
+            root.CFrame = flarePart.CFrame
+            wait(0.2)
+            local cd = flare:FindFirstChildOfClass("ClickDetector") or flare:FindFirstChild("ClickDetector")
+            if cd then fireclickdetector(cd) end
+            Notify("Flare Gun", "Picked up Flare Gun!", 2)
+        end
+    else
+        Notify("Flare Gun", "Not spawned yet", 2)
+    end
+end
+
+local function grabAllScraps()
+    local root = getRoot()
+    local scraps = Workspace:FindFirstChild("ScrapSpawns") or Workspace:FindFirstChild("Debris") or Workspace
+    local count = 0
+    if root and scraps then
+        for _, obj in ipairs(scraps:GetDescendants()) do
+            if obj.Name:find("Scrap") and obj:IsA("BasePart") then
+                root.CFrame = obj.CFrame + Vector3.new(0, 2, 0)
+                wait(0.15)
+                local cd = obj:FindFirstChildOfClass("ClickDetector")
+                if cd then fireclickdetector(cd) end
+                count = count + 1
+            end
+        end
+        Notify("Auto Scrap", "Collected " .. tostring(count) .. " scraps", 2.5)
+    end
+end
+
+--------------------------------------------------------------------
+-- BUILD MASSIVE BOLONG-HUB UI
+--------------------------------------------------------------------
+local function BuildUI()
+    local Window = Chloex:Window({
+        Title   = "BOLONG-HUB | The Rake Remastered",
+        Image   = "84034353458936",
+        Footer  = "NeverWin Full Deobfuscated Features",
+        Author  = "Discord.gg/pWpgqVGxNK",
+        Color   = ACCENT_COLOR,
+        Version = 1,
+        Search  = true,
+        Folder  = "BolongHub"
+    })
+
+    ----------------------------------------------------------------
+    -- TAB 1: COMBAT & INSTA KILL
+    ----------------------------------------------------------------
+    local CombatTab = Window:AddTab({ Name = "Combat & Kill", Icon = "sparkles" })
+    
+    local InstaSection = CombatTab:AddSection("⚡ Insta Kill & Fling Rake", nil)
+    local InstaStack = InstaSection:AddHStack()
+    InstaStack:AddToggle({
+        Title = "Insta Kill / Fling Rake",
+        Default = false,
+        Callback = function(v)
+            Config.FlingRake = v
+            Notify("Insta Fling", v and "Armed! Get near Rake" or "Disabled", 2)
+        end
+    })
+    InstaStack:AddToggle({
+        Title = "Auto Kill Loop",
+        Default = false,
+        Callback = function(v)
+            Config.AutoKillLoop = v
+            Notify("Auto Kill Loop", v and "Active" or "Disabled", 1.5)
+        end
+    })
+    InstaSection:AddSlider({
+        Title = "Fling Force (Horizontal)",
+        Min = 100,
+        Max = 600,
+        Default = 220,
+        Increment = 10,
+        Callback = function(v) Config.FlingOut = v end
+    })
+    InstaSection:AddSlider({
+        Title = "Fling Force (Launch Up)",
+        Min = 100,
+        Max = 600,
+        Default = 200,
+        Increment = 10,
+        Callback = function(v) Config.FlingUp = v end
+    })
+
+    local StunSection = CombatTab:AddSection("StunStick & Parry Aura", nil)
+    local StunStack = StunSection:AddHStack()
+    StunStack:AddToggle({
+        Title = "Auto Stun Rake",
+        Default = false,
+        Callback = function(v) Config.AutoStun = v end
+    })
+    StunStack:AddToggle({
+        Title = "Close Safe Door",
+        Default = false,
+        Callback = function(v) Config.AutoSafeDoor = v end
+    })
+    StunSection:AddSlider({
+        Title = "Stun Radius (Studs)",
+        Min = 5,
+        Max = 50,
+        Default = 16,
+        Increment = 1,
+        Callback = function(v) Config.StunRadius = v end
+    })
+
+    local HitboxSection = CombatTab:AddSection("Hitbox Expansion", nil)
+    HitboxSection:AddSlider({
+        Title = "Rake Hitbox Expander",
+        Min = 1,
+        Max = 60,
+        Default = 1,
+        Increment = 1,
+        Callback = function(v)
+            Config.HitboxSize = v
+            local rake = getRakeRoot()
+            if rake and v > 1 then
+                rake.Size = Vector3.new(v, v, v)
+                rake.Transparency = 0.6
+                rake.CanCollide = false
+            end
+        end
+    })
+
+    ----------------------------------------------------------------
+    -- TAB 2: EXPLOITS & AUTOMATION
+    ----------------------------------------------------------------
+    local ExploitTab = Window:AddTab({ Name = "Exploits", Icon = "zap" })
+    
+    local GenSection = ExploitTab:AddSection("Power Station & Crates", nil)
+    GenSection:AddButton({
+        Title = "⚡ Instant Restore Power (All Switches)",
+        Callback = function() instantRepairStation() end
+    })
+    local GenStack = GenSection:AddHStack()
+    GenStack:AddToggle({
+        Title = "Bypass Electric Shock",
+        Default = false,
+        Callback = function(v)
+            Config.BypassShock = v
+            Notify("Shock Bypass", v and "Immune to electricity" or "Disabled", 1.5)
+        end
+    })
+    GenStack:AddToggle({
+        Title = "Instant Open Crates",
+        Default = false,
+        Callback = function(v)
+            Config.InstaCrate = v
+            instantOpenAllCrates()
+        end
+    })
+
+    local TrapSection = ExploitTab:AddSection("Bear Traps & Flare Gun", nil)
+    local TrapStack = TrapSection:AddHStack()
+    TrapStack:AddToggle({
+        Title = "Anti-Trap (Immunity)",
+        Default = false,
+        Callback = function(v)
+            Config.AntiTrap = v
+            Notify("Anti-Trap", v and "Immune to bear traps" or "Disabled", 1.5)
+        end
+    })
+    TrapSection:AddButton({
+        Title = "Move Traps Under Rake (Trap Rake)",
+        Callback = function() trapRakeNow() end
+    })
+    TrapSection:AddButton({
+        Title = "Auto Shoot Flare at Rake (Silent Aim)",
+        Callback = function() autoShootFlare() end
+    })
+    TrapSection:AddButton({
+        Title = "Auto Collect All Scraps",
+        Callback = function() grabAllScraps() end
+    })
+
+    ----------------------------------------------------------------
+    -- TAB 3: VISUALS & ESP
+    ----------------------------------------------------------------
+    local VisualsTab = Window:AddTab({ Name = "Visuals & ESP", Icon = "eye" })
+    local EspSection = VisualsTab:AddSection("Entity & Location ESP", nil)
+    local EspStack = EspSection:AddHStack()
+    EspStack:AddToggle({
+        Title = "Rake ESP (Red)",
+        Default = false,
+        Callback = function(v) Config.RakeESP = v end
+    })
+    EspStack:AddToggle({
+        Title = "Location ESP",
+        Default = false,
+        Callback = function(v)
+            Config.LocationESP = v
+            updateLocationESP()
+        end
+    })
+
+    local LightSection = VisualsTab:AddSection("Atmosphere & Lighting", nil)
+    local LightStack = LightSection:AddHStack()
+    LightStack:AddToggle({
+        Title = "FullBright",
+        Default = false,
+        Callback = function(v)
+            Config.FullBright = v
+            applyLighting()
+        end
+    })
+    LightStack:AddToggle({
+        Title = "No Fog",
+        Default = false,
+        Callback = function(v)
+            Config.NoFog = v
+            applyLighting()
+        end
+    })
+
+    ----------------------------------------------------------------
+    -- TAB 4: MOVEMENT & GODMODE
+    ----------------------------------------------------------------
+    local MoveTab = Window:AddTab({ Name = "Movement", Icon = "activity" })
+    local GodSection = MoveTab:AddSection("Godmode & Protection", nil)
+    local GodStack = GodSection:AddHStack()
+    GodStack:AddToggle({
+        Title = "No Fall Damage",
+        Default = false,
+        Callback = function(v)
+            Config.NoFallDamage = v
+            Notify("No Fall Damage", v and "Active" or "Disabled", 1.5)
+        end
+    })
+    GodStack:AddToggle({
+        Title = "Infinite Stamina",
+        Default = false,
+        Callback = function(v)
+            Config.InfStamina = v
+            Notify("Infinite Stamina", v and "Active" or "Disabled", 1.5)
+        end
+    })
+
+    local PhysStack = GodSection:AddHStack()
+    PhysStack:AddToggle({
+        Title = "Noclip (All Walls)",
+        Default = false,
+        Callback = function(v) Config.Noclip = v end
+    })
+    PhysStack:AddToggle({
+        Title = "Safe Door Noclip",
+        Default = false,
+        Callback = function(v) Config.DoorNoclip = v end
+    })
+    PhysStack:AddToggle({
+        Title = "Float Pad",
+        Default = false,
+        Callback = function(v)
+            Config.FloatPad = v
+            toggleFloatPad(v)
+        end
+    })
+
+    local SpeedSection = MoveTab:AddSection("Speed & Jump", nil)
+    local SpeedStack = SpeedSection:AddHStack()
+    SpeedStack:AddToggle({
+        Title = "Enable Speed",
+        Default = false,
+        Callback = function(v)
+            Config.EnableSpeed = v
+            if not v then
+                local h = getHum()
+                if h then h.WalkSpeed = 16 end
+            end
+        end
+    })
+    SpeedSection:AddSlider({
+        Title = "WalkSpeed",
+        Min = 16,
+        Max = 150,
+        Default = 28,
+        Increment = 1,
+        Callback = function(v) Config.WalkSpeed = v end
+    })
+    SpeedSection:AddSlider({
+        Title = "JumpPower",
+        Min = 50,
+        Max = 250,
+        Default = 50,
+        Increment = 5,
+        Callback = function(v) Config.JumpPower = v end
+    })
+
+    local FlySection = MoveTab:AddSection("3D Flight", nil)
+    FlySection:AddToggle({
+        Title = "Fly (WASD + Space/Ctrl)",
+        Default = false,
+        Callback = function(v) Config.Fly = v end
+    })
+    FlySection:AddSlider({
+        Title = "Fly Speed",
+        Min = 10,
+        Max = 150,
+        Default = 50,
+        Increment = 2,
+        Callback = function(v) Config.FlySpeed = v end
+    })
+
+    ----------------------------------------------------------------
+    -- TAB 5: TELEPORTS
+    ----------------------------------------------------------------
+    local TpTab = Window:AddTab({ Name = "Teleports", Icon = "map-pin" })
+    local TpSection = TpTab:AddSection("Key Locations", nil)
+    TpSection:AddButton({
+        Title = "Teleport to Safe House",
+        Callback = function() teleportTo(LOCATIONS.SafeHouse) end
+    })
+    TpSection:AddButton({
+        Title = "Teleport to Power Station",
+        Callback = function() teleportTo(LOCATIONS.PowerStation) end
+    })
+    TpSection:AddButton({
+        Title = "Teleport to Base Camp",
+        Callback = function() teleportTo(LOCATIONS.BaseCamp) end
+    })
+    TpSection:AddButton({
+        Title = "Teleport to Shop",
+        Callback = function() teleportTo(LOCATIONS.Shop) end
+    })
+    TpSection:AddButton({
+        Title = "Teleport to Safe Sky (Immune to Rake)",
+        Callback = function() teleportTo(LOCATIONS.SafeSky) end
+    })
+
+    local EntTpSection = TpTab:AddSection("Entity Teleport", nil)
+    EntTpSection:AddButton({
+        Title = "Teleport to Flare Gun",
+        Callback = function() grabFlareGun() end
+    })
+    EntTpSection:AddButton({
+        Title = "Teleport to Rake",
+        Callback = function()
+            local r = getRakeRoot()
+            if r then
+                teleportTo(r.Position + Vector3.new(0, 4, -8))
+            else
+                Notify("Teleport", "Rake not spawned yet", 2)
+            end
+        end
+    })
+
+    ----------------------------------------------------------------
+    -- TAB 6: MISC & SETTINGS
+    ----------------------------------------------------------------
+    local MiscTab = Window:AddTab({ Name = "Misc", Icon = "settings" })
+    local UtilSection = MiscTab:AddSection("Utilities", nil)
+    UtilSection:AddToggle({
+        Title = "Anti-AFK (20 min kick bypass)",
+        Default = false,
+        Callback = function(v)
+            Config.AntiAfk = v
+            if v then
+                LP.Idled:Connect(function()
+                    if Config.AntiAfk then
+                        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                        wait(0.2)
+                        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+                    end
+                end)
+                Notify("Anti-AFK", "Enabled", 1.5)
+            end
+        end
+    })
+    UtilSection:AddButton({
+        Title = "FPS Unlocker (Max FPS)",
+        Callback = function()
+            if typeof(setfpscap) == "function" then
+                setfpscap(240)
+                Notify("FPS Unlocker", "FPS Cap set to 240!", 2)
+            end
+        end
+    })
+    UtilSection:AddButton({
+        Title = "Rejoin Server",
+        Callback = function() TeleportService:Teleport(game.PlaceId, LP) end
+    })
+    UtilSection:AddButton({
+        Title = "Server Hop (Find New Room)",
+        Callback = function()
+            pcall(function()
+                local servers = HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
+                for _, s in ipairs(servers.data) do
+                    if s.playing < s.maxPlayers and s.id ~= game.JobId then
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LP)
+                        break
+                    end
+                end
+            end)
+        end
+    })
+end
+
+-- Initialize UI
+BuildUI()
+
+Notify("BOLONG-HUB", "The Rake Full Edition Loaded!", 3)
+print("BOLONG-HUB [The Rake Full Edition] with NeverWin Insta Kill Loaded!")
