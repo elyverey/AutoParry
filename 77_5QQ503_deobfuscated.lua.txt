@@ -1,0 +1,599 @@
+--[[
+    Deobfuscated Demonic Hub Script for Anime Dimensions
+    Original Obfuscator: Herrtt Obfuscator / MoonSec / Demonic Hub Lua VM
+    Original Source: https://raw.githubusercontent.com/Prosexy/F/main/77_5QQ503.txt
+    Deobfuscated by: Expert Lua Deobfuscation Engineer
+--]]
+
+-- Ensure Fluent UI library is initialized
+local sexyfluent = getgenv().sexyfluent or _G.sexyfluent or loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+
+-- Addons
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+-- Create Main Window
+local Window = sexyfluent:CreateWindow({
+    Title = "Demonic HUB | V2 | " .. (identifyexecutor and identifyexecutor() or "Executor"),
+    SubTitle = "++ Anime Dimensions",
+    TabWidth = 117.5,
+    Size = UDim2.fromOffset(545, 345),
+    Acrylic = true,
+    Theme = "Vampire",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+-- Tabs Navigation
+local Tabs = {
+    UpdateLog = Window:AddTab({ Title = "× Update-Log", Icon = "user-cog" }),
+    Start = Window:AddTab({ Title = "× Information", Icon = "play" }),
+    Join = Window:AddTab({ Title = "× Join Game", Icon = "play" }),
+    Main = Window:AddTab({ Title = "× Main Game", Icon = "home" }),
+    Gacha = Window:AddTab({ Title = "× Gacha", Icon = "shopping-cart" }),
+    Lobby = Window:AddTab({ Title = "× Lobby", Icon = "gamepad" }),
+    Player = Window:AddTab({ Title = "× Player", Icon = "user" }),
+    Credits = Window:AddTab({ Title = "× Credits", Icon = "hand" }),
+    Settings = Window:AddTab({ Title = "× Settings", Icon = "settings" })
+}
+
+local Options = sexyfluent.Options
+
+-- Services & References
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local VirtualUser = game:GetService("VirtualUser")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local CurrentMob = nil
+
+-- Populate Map / Dimension list
+local Dimensions = {}
+pcall(function()
+    for _, v in ipairs(LocalPlayer.PlayerGui.MainGui.CenterUIFrame.PlayFrame.Frame.PlayRoomFrame.MapSelectionScrollingFrame:GetChildren()) do
+        table.insert(Dimensions, v.Name)
+    end
+end)
+
+-- Populate Characters list
+local Characters = {}
+pcall(function()
+    for _, v in ipairs(LocalPlayer.PlayerGui.MainGui.CenterUIFrame.Shop.Frame.RightShade.ShopCharacterScrollingFrame:GetChildren()) do
+        if v:IsA("ImageButton") then
+            table.insert(Characters, v.Name)
+        end
+    end
+end)
+
+-- Helper click function
+local function click(x, y)
+    VirtualUser:CaptureController()
+    VirtualUser:Button1Down(Vector2.new(x, y))
+    task.wait(0.0001)
+    VirtualUser:Button1Up(Vector2.new(x, y))
+end
+
+-- ==================== TAB: UPDATE-LOG ====================
+Tabs.UpdateLog:AddParagraph({
+    Title = "Update Log:",
+    Content = "V1.0:\nReleased!\n\nV1.1:\nAuto Dash, New Section For End Game, Auto Replay, Auto Go Back To Lobby And Bugs Fixes For Avoiding Error Notifys!",
+    Section = true
+})
+
+Tabs.UpdateLog:AddParagraph({
+    Title = "Upcoming UPD:",
+    Content = "A Better Auto Farm Like U Will Can Set Above, Below Etc...",
+    Section = true
+})
+
+-- ==================== TAB: INFORMATION ====================
+Tabs.Start:AddParagraph({
+    Title = "Current Developers :",
+    Content = "alan11ago#8475, cheapsk9#0001"
+})
+
+Tabs.Start:AddParagraph({
+    Title = "Current Script Status :",
+    Content = "Working 🟢"
+})
+
+Tabs.Start:AddParagraph({
+    Title = "Supported Executors :",
+    Content = "Codex, Arceus X, Wave, Roexc-Krampus, Hydrogen, VegaX, Trigon"
+})
+
+Tabs.Start:AddParagraph({
+    Title = "Not Supported :",
+    Content = "Delta, Alyse, Valyse, Evon, Solara, Incognito"
+})
+
+-- ==================== TAB: MAIN GAME ====================
+local MobParagraph = Tabs.Main:AddParagraph({
+    Title = "Current Farming Mob:",
+    Content = CurrentMob
+})
+
+spawn(function()
+    while task.wait() do
+        MobParagraph:SetDesc(CurrentMob)
+    end
+end)
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Dimension",
+    Description = "Basically It Will Be Doing TP To All Mobs!",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoDung = Value
+        while getgenv().AutoDung do
+            task.wait()
+            pcall(function()
+                for _, monster in pairs(workspace.Folders.Monsters:GetChildren()) do
+                    if monster:FindFirstChild("HumanoidRootPart") then
+                        local tween = TweenService:Create(
+                            LocalPlayer.Character.HumanoidRootPart,
+                            TweenInfo.new(tonumber(getgenv().Set)),
+                            { CFrame = monster.HumanoidRootPart.CFrame * CFrame.new(0, 1, 1.45) }
+                        )
+                        tween:Play()
+                        CurrentMob = monster.Name
+                        click(250, 250)
+                        break
+                    end
+                end
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddSlider("Slider", {
+    Title = "Tween Farm SPD",
+    Description = "",
+    Default = 0.5,
+    Min = 0.45,
+    Max = 5,
+    Rounding = 1,
+    Callback = function(Value)
+        getgenv().Set = Value
+    end
+})
+
+Tabs.Main:AddSection("Others Settings")
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Attack",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().Attack = Value
+        while getgenv().Attack do
+            task.wait()
+            pcall(function()
+                click(250, 250)
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Use Assist Skills",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoAssist = Value
+        while getgenv().AutoAssist do
+            task.wait(1)
+            pcall(function()
+                for _, skill in pairs({"SkillAssist1", "SkillAssist2"}) do
+                    firesignal(LocalPlayer.PlayerGui.UniversalGui.UniversalCenterUIFrame.SlotsHolder[skill].MouseButton1Click)
+                end
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Use Skills",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoSk = Value
+        while getgenv().AutoSk do
+            task.wait(1)
+            pcall(function()
+                for _, skill in pairs({"Skill1", "Skill2", "Skill3", "Skill4", "Skill5"}) do
+                    firesignal(LocalPlayer.PlayerGui.UniversalGui.UniversalCenterUIFrame.SlotsHolder[skill].MouseButton1Click)
+                end
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Use Misc Skills",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoMscSkills = Value
+        while getgenv().AutoMscSkills do
+            task.wait(1)
+            pcall(function()
+                for _, skill in pairs({"SkillAttack", "SkillDash"}) do
+                    firesignal(LocalPlayer.PlayerGui.UniversalGui.UniversalCenterUIFrame.SlotsHolder[skill].MouseButton1Click)
+                end
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Use Fruit Skills",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoF = Value
+        while getgenv().AutoF do
+            task.wait(1)
+            pcall(function()
+                for _, skill in pairs({"SkillFruit1", "SkillFruit2"}) do
+                    firesignal(LocalPlayer.PlayerGui.UniversalGui.UniversalCenterUIFrame.SlotsHolder[skill].MouseButton1Click)
+                end
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Dash",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoDah = Value
+        while getgenv().AutoDah do
+            task.wait(5)
+            VirtualInputManager:SendKeyEvent(true, "Q", false, game)
+        end
+    end
+})
+
+Tabs.Main:AddSection("End Game")
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Replay",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().Replay = Value
+        while getgenv().Replay do
+            task.wait(0.1)
+            pcall(function()
+                local resultUI = LocalPlayer.PlayerGui.UniversalGui.UniversalCenterUIFrame.ResultUI
+                if resultUI.Visible then
+                    firesignal(resultUI.Frame.RetryDungeonButton.MouseButton1Click)
+                end
+            end)
+        end
+    end
+})
+
+Tabs.Main:AddToggle("", {
+    Title = "Auto Go Back To Lobby",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().Leave = Value
+        while getgenv().Leave do
+            task.wait(0.1)
+            pcall(function()
+                local resultUI = LocalPlayer.PlayerGui.UniversalGui.UniversalCenterUIFrame.ResultUI
+                if resultUI.Visible then
+                    firesignal(resultUI.Frame.LeaveDungeonButton.MouseButton1Click)
+                end
+            end)
+        end
+    end
+})
+
+-- ==================== TAB: JOIN GAME ====================
+Tabs.Join:AddDropdown("", {
+    Title = "Select Dimensions",
+    Description = "",
+    Values = Dimensions,
+    Multi = false,
+    Default = "",
+    Callback = function(Value)
+        getgenv().Dimension = Value
+    end
+})
+
+Tabs.Join:AddDropdown("", {
+    Title = "Select Difficult",
+    Description = "",
+    Values = {"Easy", "Hard", "Nightmare"},
+    Multi = false,
+    Default = "",
+    Callback = function(Value)
+        getgenv().Difficult = Value
+    end
+})
+
+Tabs.Join:AddToggle("", {
+    Title = "Hardcore",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().Hardcore = Value
+    end
+})
+
+Tabs.Join:AddToggle("", {
+    Title = "Friends Only",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().FriendsOnly = Value
+    end
+})
+
+Tabs.Join:AddToggle("", {
+    Title = "Auto Create Party",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoCreate = Value
+        while getgenv().AutoCreate do
+            task.wait()
+            pcall(function()
+                local args = {
+                    "CreateRoom",
+                    {
+                        Difficulty = getgenv().Difficult,
+                        Hardcore = getgenv().Hardcore,
+                        FriendsOnly = getgenv().FriendsOnly,
+                        MapName = getgenv().Dimension
+                    }
+                }
+                game:GetService("ReplicatedStorage"):WaitForChild("RemoteFunctions"):WaitForChild("MainRemoteFunction"):InvokeServer(unpack(args))
+            end)
+        end
+    end
+})
+
+Tabs.Join:AddToggle("", {
+    Title = "Auto Start Party",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoStart = Value
+        while getgenv().AutoStart do
+            task.wait()
+            pcall(function()
+                local partyStart = LocalPlayer.PlayerGui.MainGui.CenterUIFrame.PlayFrame.Frame.PlayRoomFrame.PartyJoinedFrame.PartyJoinedTemplate.PartyStart
+                if partyStart.Visible then
+                    firesignal(partyStart.MouseButton1Click)
+                    Window:Notify({
+                        Title = "¡Started Party!",
+                        Content = "",
+                        SubContent = "",
+                        Duration = 5
+                    })
+                end
+            end)
+        end
+    end
+})
+
+-- ==================== TAB: GACHA ====================
+Tabs.Gacha:AddDropdown("", {
+    Title = "Select Ammount",
+    Description = "",
+    Values = {"One", "Quad"},
+    Multi = false,
+    Default = "",
+    Callback = function(Value)
+        getgenv().Ammo = Value
+    end
+})
+
+local GachaTypes = {
+    One = "BuyFruit",
+    Quad = "BuyFruitQuad"
+}
+
+Tabs.Gacha:AddToggle("", {
+    Title = "Auto Fruit Gacha",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoGacha = Value
+        while getgenv().AutoGacha do
+            task.wait(tonumber(getgenv().GachaSPD) or 1.2)
+            pcall(function()
+                local args = {
+                    GachaTypes[getgenv().Ammo],
+                    "BasicFruitGacha"
+                }
+                game:GetService("ReplicatedStorage"):WaitForChild("RemoteFunctions"):WaitForChild("MainRemoteFunction"):InvokeServer(unpack(args))
+            end)
+        end
+    end
+})
+
+Tabs.Gacha:AddSlider("Slider", {
+    Title = "Auto Gacha SPD",
+    Description = "",
+    Default = 1.2,
+    Min = 0.2,
+    Max = 10,
+    Rounding = 1,
+    Callback = function(Value)
+        getgenv().GachaSPD = Value
+    end
+})
+
+-- ==================== TAB: LOBBY ====================
+Tabs.Lobby:AddToggle("", {
+    Title = "Auto Claim Daily Quests",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().Dai = Value
+        while getgenv().Dai do
+            task.wait(5)
+            pcall(function()
+                for _, quest in ipairs(LocalPlayer.PlayerGui.MainGui.CenterUIFrame.QuestFrame.QuestFrames.DailyQuestFrame.DailyQuestScrollingFrame:GetChildren()) do
+                    local args = {
+                        "CompleteDailyQuest",
+                        quest.Name
+                    }
+                    game:GetService("ReplicatedStorage"):WaitForChild("RemoteFunctions"):WaitForChild("MainRemoteFunction"):InvokeServer(unpack(args))
+                    Window:Notify({
+                        Title = "Redeemed Quest:",
+                        Content = quest.Name,
+                        SubContent = "",
+                        Duration = 5
+                    })
+                end
+            end)
+        end
+    end
+})
+
+Tabs.Lobby:AddToggle("", {
+    Title = "Auto Claim Weekly Quests",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().Dai = Value
+        while getgenv().Dai do
+            task.wait(5)
+            pcall(function()
+                for _, quest in ipairs(LocalPlayer.PlayerGui.MainGui.CenterUIFrame.QuestFrame.QuestFrames.WeeklyQuestFrame.WeeklyQuestScrollingFrame:GetChildren()) do
+                    local args = {
+                        "CompleteDailyQuest",
+                        quest.Name
+                    }
+                    game:GetService("ReplicatedStorage"):WaitForChild("RemoteFunctions"):WaitForChild("MainRemoteFunction"):InvokeServer(unpack(args))
+                    Window:Notify({
+                        Title = "Redeemed Quest:",
+                        Content = quest.Name,
+                        SubContent = "",
+                        Duration = 5
+                    })
+                end
+            end)
+        end
+    end
+})
+
+Tabs.Lobby:AddSection("Buy Characters")
+
+Tabs.Lobby:AddDropdown("", {
+    Title = "Select Character",
+    Description = "",
+    Values = Characters,
+    Multi = false,
+    Default = "",
+    Callback = function(Value)
+        getgenv().Charac = Value
+    end
+})
+
+Tabs.Lobby:AddButton({
+    Title = "Buy Selected Character",
+    Description = "",
+    Callback = function()
+        pcall(function()
+            local args = {
+                "BuyCharacter",
+                getgenv().Charac
+            }
+            game:GetService("ReplicatedStorage"):WaitForChild("RemoteFunctions"):WaitForChild("MainRemoteFunction"):InvokeServer(unpack(args))
+        end)
+    end
+})
+
+-- ==================== TAB: PLAYER ====================
+Tabs.Player:AddSlider("Slidper", {
+    Title = "WalkSpeed",
+    Description = "",
+    Default = 20,
+    Min = 20,
+    Max = 5000,
+    Rounding = 1,
+    Callback = function(Value)
+        getgenv().Num = Value
+    end
+})
+
+Tabs.Player:AddToggle("", {
+    Title = "Set WalkSpeed",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoSpeed = Value
+        while getgenv().AutoSpeed do
+            task.wait(0.001)
+            pcall(function()
+                LocalPlayer.Character.Humanoid.WalkSpeed = tonumber(getgenv().Num)
+            end)
+        end
+    end
+})
+
+Tabs.Player:AddSlider("Slidper", {
+    Title = "JumpPower",
+    Description = "",
+    Default = 20,
+    Min = 20,
+    Max = 500,
+    Rounding = 1,
+    Callback = function(Value)
+        getgenv().Numm = Value
+    end
+})
+
+Tabs.Player:AddToggle("", {
+    Title = "Set JumpPower",
+    Description = "",
+    Default = false,
+    Callback = function(Value)
+        getgenv().AutoJump = Value
+        while getgenv().AutoJump do
+            task.wait(0.001)
+            pcall(function()
+                LocalPlayer.Character.Humanoid.JumpPower = tonumber(getgenv().Numm)
+            end)
+        end
+    end
+})
+
+-- ==================== TAB: CREDITS ====================
+Tabs.Credits:AddParagraph({
+    Title = "Credits To :",
+    Content = "alan11ago#8475"
+})
+
+Tabs.Credits:AddButton({
+    Title = "Copy Discord Server Inv",
+    Description = "It Copys To Clipboard The Inv To Server",
+    Callback = function()
+        setclipboard("https://discord.gg/W2KPqjbJvb")
+    end
+})
+
+-- ==================== TAB: SETTINGS & CONFIGS ====================
+SaveManager:SetLibrary(sexyfluent)
+InterfaceManager:SetLibrary(sexyfluent)
+
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({})
+
+InterfaceManager:SetFolder("Demonichub")
+SaveManager:SetFolder("Demonichub/Project Mugetsu")
+
+InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
+
+Window:SelectTab(1)
+SaveManager:LoadAutoloadConfig()
